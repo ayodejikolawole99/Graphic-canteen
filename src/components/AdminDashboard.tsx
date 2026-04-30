@@ -9,10 +9,11 @@ import { useAuth } from '../hooks/useAuth';
 
 export default function AdminDashboard() {
   const { profile: currentAdmin } = useAuth();
-  const [activeTab, setActiveTab] = useState<'enroll' | 'reports' | 'alloc' | 'approvals' | 'permissions'>('reports');
+  const [activeTab, setActiveTab] = useState<'enroll' | 'reports' | 'alloc' | 'approvals' | 'permissions' | 'staff'>('reports');
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   
   // New User Form State
   const [newUser, setNewUser] = useState({
@@ -182,6 +183,15 @@ export default function AdminDashboard() {
                 {pendingUsers.length + deletionRequests.length}
               </span>
             )}
+          </button>
+          <button 
+            onClick={() => setActiveTab('staff')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              activeTab === 'staff' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            Staff Management
           </button>
           <button 
             onClick={() => setActiveTab('permissions')}
@@ -613,58 +623,96 @@ export default function AdminDashboard() {
             </div>
           </motion.div>
         )}
+
+        {activeTab === 'staff' && (
+          <motion.div 
+            key="staff"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6"
+          >
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                        <h3 className="font-bold text-slate-900 text-lg">Active Personnel Registry</h3>
+                        <p className="text-sm text-slate-500">Manage access and ticket balances for all enrolled staff.</p>
+                    </div>
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input 
+                          type="text" 
+                          placeholder="Search name or ID..." 
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="pl-10 pr-4 py-2 bg-slate-50 rounded-xl text-xs outline-none w-full md:w-64 border border-slate-100 focus:border-cyan-300 transition-colors" 
+                        />
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                        <thead>
+                            <tr className="bg-slate-50">
+                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Name</th>
+                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
+                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tickets</th>
+                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
+                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {activeUsers
+                              .filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase()) || u.id.toLowerCase().includes(searchQuery.toLowerCase()))
+                              .map(user => (
+                                <tr key={user.id} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="px-8 py-4">
+                                        <p className="text-sm font-bold text-slate-900">{user.name}</p>
+                                        <p className="text-[10px] font-mono text-slate-400 uppercase">{user.id}</p>
+                                    </td>
+                                    <td className="px-8 py-4">
+                                        <span className="text-[10px] font-bold uppercase bg-slate-100 px-2 py-1 rounded-md text-slate-500">
+                                            {user.department}
+                                        </span>
+                                    </td>
+                                    <td className="px-8 py-4 font-mono text-sm">
+                                        <span className={user.ticketsBalance > 0 ? 'text-emerald-600' : 'text-red-500'}>
+                                            {user.ticketsBalance}
+                                        </span>
+                                        <span className="text-slate-300"> / {user.weeklyAllocation}</span>
+                                    </td>
+                                    <td className="px-8 py-4">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            <span className="text-[10px] font-bold uppercase text-emerald-600">ACTIVE</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-8 py-4 text-right">
+                                        <div className="flex justify-end gap-2">
+                                            <button 
+                                                onClick={() => requestDelete(user.id)}
+                                                className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
+                                                title="Request Deletion (Level 1)"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {activeUsers.length === 0 && (
+                                <tr>
+                                    <td colSpan={5} className="p-12 text-center text-slate-400 italic">No active personnel found.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* Main User List (Always visible in Reports or common view if needed) */}
-      {activeTab === 'reports' && (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                <h3 className="font-bold text-slate-900">Manage Active Staff</h3>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input type="text" placeholder="Search staff..." className="pl-10 pr-4 py-2 bg-slate-50 rounded-xl text-xs outline-none" />
-                </div>
-            </div>
-            <table className="w-full text-left">
-                <thead>
-                    <tr className="bg-slate-50">
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Name</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tickets</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                    {activeUsers.map(user => (
-                        <tr key={user.id}>
-                            <td className="px-8 py-4">
-                                <p className="text-sm font-bold text-slate-900">{user.name}</p>
-                                <p className="text-[10px] font-mono text-slate-400">{user.id}</p>
-                            </td>
-                            <td className="px-8 py-4 font-mono text-sm">
-                                <span className={user.ticketsBalance > 0 ? 'text-emerald-600' : 'text-red-500'}>
-                                    {user.ticketsBalance}
-                                </span>
-                                <span className="text-slate-300"> / {user.weeklyAllocation}</span>
-                            </td>
-                            <td className="px-8 py-4">
-                                <span className="text-[10px] font-bold uppercase bg-emerald-50 text-emerald-600 px-2 py-1 rounded-md">ACTIVE</span>
-                            </td>
-                            <td className="px-8 py-4 text-right">
-                                <button 
-                                    onClick={() => requestDelete(user.id)}
-                                    className="p-2 text-slate-300 hover:text-red-500 transition-colors"
-                                    title="Revoke Access"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-      )}
     </div>
   );
 }
