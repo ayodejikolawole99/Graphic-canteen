@@ -325,65 +325,45 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
               )}
             </div>
 
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-cyan-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                <ShieldCheck className="w-8 h-8 text-cyan-600" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900">Final Verification</h3>
-              <p className="text-sm text-slate-500">Security protocol: Confirm biometric signature</p>
-            </div>
-
-            <form onSubmit={handleVerify} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Fingerprint Signature Hash</label>
-                <div className="relative">
-                  <Fingerprint className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />
-                  <input 
-                    type="password"
-                    autoFocus
-                    value={verificationToken}
-                    onChange={(e) => setVerificationToken(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-cyan-500 transition-all font-mono text-sm"
-                    placeholder="Enter biometric token..."
-                    required
-                    disabled={isVerifying}
-                  />
-                </div>
-                {profile.biometricToken && (
-                  <p className="text-[10px] text-slate-400 mt-2 italic text-center">
-                    Hint: {profile.biometricToken}
-                  </p>
+            <div className="text-center mb-10">
+              <div className="w-20 h-20 bg-cyan-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                {isVerifying ? (
+                    <Loader2 className="w-10 h-10 text-cyan-600 animate-spin" />
+                ) : (
+                    <Fingerprint className="w-10 h-10 text-cyan-600" />
                 )}
               </div>
+              <h3 className="text-xl font-bold text-slate-900">
+                {isVerifying ? 'Hardware verification active' : 'Confirm Identity'}
+              </h3>
+              <p className="text-sm text-slate-500 mt-2">
+                {isVerifying 
+                  ? 'Please use your registered biometric device now...' 
+                  : 'Ready to scan. Click confirm to trigger hardware.'}
+              </p>
+            </div>
 
-              <div className="flex gap-3 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setShowVerifyModal(false);
-                    setScanning(false);
-                  }}
-                  disabled={isVerifying}
-                  className="flex-1 py-3 px-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors disabled:opacity-50"
-                >
-                  Abort
-                </button>
-                <button 
-                  type="submit"
-                  disabled={isVerifying}
-                  className="flex-1 py-3 px-4 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-700 transition-colors shadow-lg shadow-cyan-100 disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isVerifying ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Matching...
-                    </>
-                  ) : (
-                    'Confirm'
-                  )}
-                </button>
-              </div>
-            </form>
+            <div className="flex gap-3">
+              <button 
+                type="button"
+                onClick={() => {
+                  setShowVerifyModal(false);
+                  setScanning(false);
+                }}
+                disabled={isVerifying}
+                className="flex-1 py-3 px-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button 
+                type="button"
+                onClick={() => handleVerify('')}
+                disabled={isVerifying}
+                className="flex-2 py-3 px-4 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-700 transition-colors shadow-lg shadow-cyan-100 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isVerifying ? 'Scanning...' : 'Confirm & Scan'}
+              </button>
+            </div>
           </motion.div>
         </div>
       )}

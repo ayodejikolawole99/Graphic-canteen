@@ -359,15 +359,14 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="md:col-span-2 space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Biometric Registration</label>
+                  <label className="text-xs font-bold text-slate-400 uppercase">Biometric Enrollment</label>
                   <div className="flex gap-4">
-                    <input 
-                      type="text" 
-                      value={newUser.biometricToken || ''}
-                      onChange={(e) => setNewUser({...newUser, biometricToken: e.target.value})}
-                      className="flex-1 px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono text-sm"
-                      placeholder="Fingerprint Token (Auto-generated)"
-                    />
+                    <div className={`flex-1 px-5 py-3 rounded-2xl flex items-center gap-3 border ${newUser.biometricToken ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
+                      <Fingerprint className={`w-5 h-5 ${newUser.biometricToken ? 'text-emerald-500' : 'text-slate-300'}`} />
+                      <span className="text-sm font-medium">
+                        {newUser.biometricToken ? 'Hardware Registered' : 'Not Registered'}
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={async () => {
@@ -379,10 +378,8 @@ export default function AdminDashboard() {
                           const cred = await enrollBiometrics(newUser.id, newUser.name);
                           setNewUser({
                             ...newUser,
-                            biometricToken: cred.credentialId, // Use credentialId as the primary token
-                            // We can store more if we want, but let's stick to update logic later
+                            biometricToken: cred.credentialId,
                           });
-                          alert("Fingerprint scanned and linked!");
                         } catch (err: any) {
                           alert(err.message || "Scanning failed.");
                         }
@@ -390,10 +387,9 @@ export default function AdminDashboard() {
                       className="px-6 py-3 bg-cyan-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-cyan-700 transition-colors"
                     >
                       <Fingerprint className="w-5 h-5" />
-                      Scan Finger
+                      {newUser.biometricToken ? 'Rescan Finger' : 'Scan Finger'}
                     </button>
                   </div>
-                  <p className="text-[10px] text-slate-400">Actual biometric data is stored securely in the browser/hardware. We only store a public identity token.</p>
                 </div>
                 <button 
                   type="submit"
