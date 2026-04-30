@@ -23,6 +23,9 @@ export default defineConfig(({mode}) => {
     },
     preview: {
       allowedHosts: ['graphic-canteen-2.onrender.com'],
+      allowedHosts: ['graphic-canteen-3.onrender.com'],
+      allowedHosts: ['graphic-canteen-4.onrender.com'],
+      allowedHosts: ['graphic-canteen-5.onrender.com'],
     },
   };
 });
