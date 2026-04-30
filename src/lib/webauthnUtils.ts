@@ -28,6 +28,7 @@ export async function enrollBiometrics(userId: string, userName: string) {
     throw new Error('Biometric scanning is not supported by this browser.');
   }
 
+  // Generate a random challenge
   const challenge = new Uint8Array(32);
   window.crypto.getRandomValues(challenge);
 
@@ -47,26 +48,35 @@ export async function enrollBiometrics(userId: string, userName: string) {
       { alg: -257, type: "public-key" } // RS256
     ],
     authenticatorSelection: {
-      userVerification: "required",
-      // Removing authenticatorAttachment: "platform" to allow both built-in (platform) 
-      // and USB plug-and-play (cross-platform) biometric scanners.
+      userVerification: "preferred", // More compatible with varied hardware
+      residentKey: "preferred",
+      requireResidentKey: false
     },
     timeout: 60000,
     attestation: "none"
   };
 
-  const credential = (await navigator.credentials.create({
-    publicKey: createOptions
-  })) as PublicKeyCredential;
+  try {
+    const credential = (await navigator.credentials.create({
+      publicKey: createOptions
+    })) as PublicKeyCredential;
 
-  if (!credential) throw new Error('Enrollment failed - no credential created.');
+    if (!credential) throw new Error('Enrollment failed - no credential created.');
 
-  const response = credential.response as AuthenticatorAttestationResponse;
-  
-  return {
-    credentialId: credential.id,
-    publicKey: bufferToBase64(response.getPublicKey())
-  };
+    const response = credential.response as AuthenticatorAttestationResponse;
+    
+    // We store the raw ID which is base64url encoded string in .id
+    return {
+      credentialId: credential.id,
+      publicKey: bufferToBase64(response.getPublicKey())
+    };
+  } catch (err: any) {
+    console.error("Enrollment Error:", err);
+    if (err.name === 'NotAllowedError') throw new Error('Registration timed out or was cancelled by the user.');
+    if (err.name === 'InvalidStateError') throw new Error('This device or fingerprint is already registered.');
+    if (err.name === 'SecurityError') throw new Error('Security Error: WebAuthn requires HTTPS and matching domain.');
+    throw err;
+  }
 }
 
 export async function verifyBiometrics(credentialId: string) {
@@ -84,16 +94,23 @@ export async function verifyBiometrics(credentialId: string) {
     type: "public-key" as const
   }];
 
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge,
-      rpId: window.location.hostname,
-      allowCredentials,
-      userVerification: "required"
-    }
-  });
+  try {
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        rpId: window.location.hostname,
+        allowCredentials,
+        userVerification: "preferred", // More compatible
+        timeout: 60000
+      }
+    });
 
-  if (!assertion) throw new Error('Verification failed - no assertion produced.');
-
-  return assertion;
+    if (!assertion) throw new Error('Verification failed - no assertion produced.');
+    return assertion;
+  } catch (err: any) {
+    console.error("Verification Error:", err);
+    if (err.name === 'NotAllowedError') throw new Error('Verification timed out or was cancelled.');
+    if (err.name === 'NotSupportedError') throw new Error('Your browser or hardware does not support this biometric method.');
+    throw new Error(`Biometric Error: ${err.message}`);
+  }
 }

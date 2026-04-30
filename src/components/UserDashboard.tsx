@@ -99,8 +99,9 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
       if (isKiosk) {
         setTimeout(() => setScanResult(null), 8000);
       }
-    } catch (err) {
+    } catch (err: any) {
       setScanResult('fail');
+      setError(err.message || 'Biometric data did not match or error occurred.');
       setShowVerifyModal(false);
       setVerificationToken('');
       
@@ -235,9 +236,12 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
                 <XCircle className="w-12 h-12 text-red-600" />
               </div>
               <h3 className="text-2xl font-bold text-slate-900 mb-2">Verification Failed</h3>
-              <p className="text-slate-500 mb-8">Biometric data did not match or error occurred. Please try again.</p>
+              <p className="text-slate-500 mb-8">{error || 'Biometric data did not match or error occurred. Please try again.'}</p>
               <button 
-                onClick={() => setScanResult(null)}
+                onClick={() => {
+                  setScanResult(null);
+                  setError(null);
+                }}
                 className="bg-slate-900 text-white px-8 py-3 rounded-xl font-semibold"
               >
                 Retry Scan
