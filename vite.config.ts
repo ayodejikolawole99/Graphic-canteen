@@ -22,7 +22,7 @@ export default defineConfig(({mode}) => {
       hmr: process.env.DISABLE_HMR !== 'true',
     },
     preview: {
-      allowedHosts: ['graphic-canteen-3.onrender.com'],
+      allowedHosts: true,
     },
   };
 });

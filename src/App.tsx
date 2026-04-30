@@ -45,12 +45,16 @@ export default function App() {
     }
   };
 
+    const [authError, setAuthError] = useState<string | null>(null);
+
   const handleLogin = async () => {
+    setAuthError(null);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login failed:', error);
+      setAuthError(error.message || 'Authentication failed. Please check your internet connection or if the domain is authorized in Firebase Console.');
     }
   };
 
@@ -116,6 +120,16 @@ export default function App() {
             <ShieldCheck className="w-5 h-5" />
             Continue with Secure Auth
           </button>
+
+          {authError && (
+             <motion.div 
+               initial={{ opacity: 0, scale: 0.95 }}
+               animate={{ opacity: 1, scale: 1 }}
+               className="p-4 bg-red-50 border border-red-100 rounded-xl text-red-600 text-sm italic"
+             >
+               <strong>Authentication Error:</strong> {authError}
+             </motion.div>
+          )}
           
           <div className="text-xs text-slate-400 mt-8 space-y-2">
              <p>Admin? Please use your corporate credentials.</p>
