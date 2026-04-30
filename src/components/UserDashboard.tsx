@@ -21,6 +21,7 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [verificationToken, setVerificationToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [scannerStatus, setScannerStatus] = useState<'idle' | 'detected'>('idle');
 
   // Automatic reset for Kiosk Mode
@@ -40,48 +41,78 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
     }
   }, [isKiosk, scanning, showVerifyModal, scanResult]);
 
-  const handleVerify = useCallback(async (e?: React.FormEvent | string) => {
-    if (typeof e !== 'string') {
-      e?.preventDefault();
+  const handleVerify = useCallback(async (tokenOrEvent?: React.FormEvent | string) => {
+    if (typeof tokenOrEvent !== 'string') {
+      tokenOrEvent?.preventDefault();
     }
-    const token = typeof e === 'string' ? e : verificationToken;
+    const token = typeof tokenOrEvent === 'string' ? tokenOrEvent : verificationToken;
     
+    if (!profile) {
+      setError("User profile not authenticated. Please refresh or log in.");
+      return;
+    }
+
+    // Determine if we should attempt a WebAuthn trigger or just wait for HID input
+    const isWebAuthn = profile.biometricToken && profile.biometricToken.length > 20;
+
+    // If we are manually triggering (empty token) and it's NOT WebAuthn, we just wait
+    if (token === '' && !isWebAuthn) {
+      setShowVerifyModal(true);
+      setIsVerifying(true); // Shows the scanning state
+      setError(null);
+      return;
+    }
+
     setIsVerifying(true);
     setScanning(false);
     setShowVerifyModal(true);
-    if (typeof e === 'string') setVerificationToken(token);
+    setError(null);
+    if (typeof token === 'string' && token !== '') setVerificationToken(token);
 
     try {
-      // If no token was provided (manual confirm click), try real WebAuthn if we have a ID stored
-      if (token === '' && profile.biometricToken && profile.biometricToken.length > 20) {
-        // Long tokens are usually WebAuthn IDs
+      // If no token was provided (manual confirm click), trigger WebAuthn
+      if (token === '' && isWebAuthn) {
         try {
-          await verifyBiometrics(profile.biometricToken);
-          // If verifyBiometrics didn't throw, it's a match!
-        } catch (authErr) {
-          throw new Error('Biometric authentication failed or was cancelled.');
+          await verifyBiometrics(profile.biometricToken!);
+        } catch (authErr: any) {
+          throw authErr; // already handled in webauthnUtils, just rethrow
+        }
+      } else if (token !== '') {
+        // HID Scanner or manual entry check
+        if (token !== profile.biometricToken && profile.biometricToken !== undefined) {
+          throw new Error('Biometric signature mismatch. Please try again.');
         }
       } else {
-        // Fallback or HID Scanner check
-        if (token !== profile.biometricToken && profile.biometricToken !== undefined) {
-          throw new Error('Verification signature mismatch');
-        }
+        // No token and not WebAuthn - this case should be handled by the early return above,
+        // but as a safety measure:
+        throw new Error('Please scan your biometric device.');
       }
 
       const attendanceRef = collection(db, 'attendance');
-      const newDoc = await addDoc(attendanceRef, {
-        userId: profile.id,
-        userName: profile.name,
-        department: profile.department,
-        timestamp: serverTimestamp(),
-        mealType: getCurrentMealType(),
-      });
+      let newDoc;
+      try {
+        newDoc = await addDoc(attendanceRef, {
+          userId: profile.id,
+          userName: profile.name,
+          department: profile.department,
+          timestamp: serverTimestamp(),
+          mealType: getCurrentMealType(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, 'attendance');
+        return; // handleFirestoreError throws, but just in case
+      }
 
       const userRef = doc(db, 'users', profile.id);
       const newBalance = balance - 1;
-      await updateDoc(userRef, {
-        ticketsBalance: newBalance
-      });
+      try {
+        await updateDoc(userRef, {
+          ticketsBalance: newBalance
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `users/${profile.id}`);
+        return;
+      }
 
       setBalance(newBalance);
       setScanResult('success');
@@ -95,23 +126,26 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
         window.print();
       }, 500);
 
-      // Auto-reset for kiosk
       if (isKiosk) {
         setTimeout(() => setScanResult(null), 8000);
       }
     } catch (err: any) {
+      console.error("Verification failed:", err);
       setScanResult('fail');
-      setError(err.message || 'Biometric data did not match or error occurred.');
+      setError(err.message || 'Verification error occurred.');
       setShowVerifyModal(false);
       setVerificationToken('');
       
       if (isKiosk) {
-        setTimeout(() => setScanResult(null), 5000);
+        setTimeout(() => {
+          setScanResult(null);
+          setError(null);
+        }, 5000);
       }
     } finally {
       setIsVerifying(false);
     }
-  }, [balance, profile, verificationToken, isKiosk]);
+  }, [balance, profile, verificationToken, isKiosk, setError]);
 
   // Hardware Scanner Integration
   useHardwareScanner({

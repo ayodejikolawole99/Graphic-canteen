@@ -84,14 +84,19 @@ export async function verifyBiometrics(credentialId: string) {
     throw new Error('Biometric scanning is not supported by this browser.');
   }
 
+  // Generate a random challenge
   const challenge = new Uint8Array(32);
   window.crypto.getRandomValues(challenge);
 
   // The credential ID from navigator.credentials.create().id is base64url encoded.
   // We need to convert it to a buffer for the allowCredentials list.
-  const allowCredentials = [{
-    id: Uint8Array.from(atob(credentialId.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)),
-    type: "public-key" as const
+  const base64 = credentialId.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = base64.length % 4;
+  const paddedBase64 = pad ? base64 + '='.repeat(4 - pad) : base64;
+  
+  const allowCredentials: PublicKeyCredentialDescriptor[] = [{
+    id: base64ToBuffer(paddedBase64),
+    type: "public-key"
   }];
 
   try {
@@ -100,17 +105,18 @@ export async function verifyBiometrics(credentialId: string) {
         challenge,
         rpId: window.location.hostname,
         allowCredentials,
-        userVerification: "preferred", // More compatible
+        userVerification: "preferred", // More compatible with varied hardware
         timeout: 60000
       }
     });
 
-    if (!assertion) throw new Error('Verification failed - no assertion produced.');
+    if (!assertion) throw new Error('Verification failed - no biometric signal produced.');
     return assertion;
   } catch (err: any) {
     console.error("Verification Error:", err);
-    if (err.name === 'NotAllowedError') throw new Error('Verification timed out or was cancelled.');
-    if (err.name === 'NotSupportedError') throw new Error('Your browser or hardware does not support this biometric method.');
-    throw new Error(`Biometric Error: ${err.message}`);
+    if (err.name === 'NotAllowedError') throw new Error('Biometric scan was cancelled or timed out.');
+    if (err.name === 'NotSupportedError') throw new Error('Your hardware/browser doesn\'t support this security method.');
+    if (err.name === 'SecurityError') throw new Error('Security Error: WebAuthn requires a secure context (HTTPS).');
+    throw new Error(`Biometric hardware error: ${err.message}`);
   }
 }

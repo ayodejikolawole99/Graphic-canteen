@@ -15,15 +15,20 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (getUserData().role == 'admin' || request.auth.token.email == 'ayodejikolawole99@gmail.com');
+      return isSignedIn() && (
+        request.auth.token.email == 'ayodejikolawole99@gmail.com' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin'
+      );
     }
 
     function getAdminLevel() {
-      return getUserData().get('adminLevel', 1);
+      return (request.auth.token.email == 'ayodejikolawole99@gmail.com') ? 2 :
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('adminLevel', 1);
     }
 
     function isChecker() {
-      return isAdmin() && (getAdminLevel() == 2 || request.auth.token.email == 'ayodejikolawole99@gmail.com');
+      return (request.auth.token.email == 'ayodejikolawole99@gmail.com') ||
+             (isAdmin() && getAdminLevel() == 2);
     }
 
     function isOwner(userId) {
@@ -31,7 +36,7 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
     }
 
     match /users/{userId} {
@@ -39,9 +44,9 @@ service cloud.firestore {
         return data.keys().hasAll(['id', 'name', 'department', 'role', 'ticketsBalance', 'weeklyAllocation', 'status']) &&
                data.id is string &&
                data.name is string && data.name.size() <= 100 &&
-               data.department is string && data.department.size() <= 50 &&
+               data.department is string && data.department.size() <= 60 &&
                data.role in ['user', 'admin'] &&
-               data.status in ['pending_approval', 'active', 'pending_deletion'] &&
+               data.status in ['active', 'pending_approval', 'pending_deletion'] &&
                data.ticketsBalance is int &&
                data.weeklyAllocation is int &&
                isValidId(data.id);
@@ -49,31 +54,33 @@ service cloud.firestore {
 
       allow get: if isSignedIn();
       allow list: if isAdmin();
-      allow create: if isAdmin() && isValidUser(request.resource.data) && request.resource.data.status == 'pending_approval';
-      allow update: if (isAdmin() && (
-                          // Rule for Checkers: Can change anything or approve
-                          (isChecker()) ||
-                          // Rule for Makers: Can request deletion or change token
-                          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'biometricToken']) && 
-                           request.resource.data.status in ['pending_deletion', 'pending_approval'])
-                        )) && isValidUser(request.resource.data);
+      allow create: if isSignedIn() && (userId == request.auth.uid || isAdmin() || request.auth.token.email == 'ayodejikolawole99@gmail.com');
+      allow update: if isSignedIn() && (
+        (isAdmin() && (
+          (isChecker()) ||
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'biometricToken', 'ticketsBalance', 'weeklyAllocation']))
+        )) ||
+        (isOwner(userId) && 
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ticketsBalance', 'biometricToken', 'webauthnCredentialId', 'webauthnPublicKey'])
+        )
+      );
       allow delete: if isChecker();
     }
 
     match /attendance/{attendanceId} {
       function isValidAttendance(data) {
         return data.keys().hasAll(['userId', 'userName', 'department', 'timestamp', 'mealType']) &&
-               data.userId == request.auth.uid &&
+               data.userId is string &&
                data.timestamp == request.time &&
                data.department is string &&
-               data.department.size() <= 50 &&
+               data.department.size() <= 60 &&
                isValidId(data.userId);
       }
 
       allow get: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isSignedIn() && isValidAttendance(request.resource.data) &&
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ticketsBalance > 0;
+                      (request.resource.data.userId == request.auth.uid || isAdmin());
     }
   }
 }
