@@ -1,5 +1,6 @@
+import { verifyBiometrics } from '../lib/webauthnUtils';
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
-import { CheckCircle2, Fingerprint, Printer, ShieldCheck, Ticket, XCircle, Cpu } from 'lucide-react';
+import { CheckCircle2, Fingerprint, Printer, ShieldCheck, Ticket, XCircle, Cpu, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useCallback } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -50,56 +51,65 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
     setShowVerifyModal(true);
     if (typeof e === 'string') setVerificationToken(token);
 
-    // Simulate cryptographic processing
-    setTimeout(async () => {
-      try {
+    try {
+      // If no token was provided (manual confirm click), try real WebAuthn if we have a ID stored
+      if (token === '' && profile.biometricToken && profile.biometricToken.length > 20) {
+        // Long tokens are usually WebAuthn IDs
+        try {
+          await verifyBiometrics(profile.biometricToken);
+          // If verifyBiometrics didn't throw, it's a match!
+        } catch (authErr) {
+          throw new Error('Biometric authentication failed or was cancelled.');
+        }
+      } else {
+        // Fallback or HID Scanner check
         if (token !== profile.biometricToken && profile.biometricToken !== undefined) {
-          throw new Error('Biometric token mismatch');
+          throw new Error('Verification signature mismatch');
         }
-
-        const attendanceRef = collection(db, 'attendance');
-        const newDoc = await addDoc(attendanceRef, {
-          userId: profile.id,
-          userName: profile.name,
-          department: profile.department,
-          timestamp: serverTimestamp(),
-          mealType: getCurrentMealType(),
-        });
-
-        const userRef = doc(db, 'users', profile.id);
-        const newBalance = balance - 1;
-        await updateDoc(userRef, {
-          ticketsBalance: newBalance
-        });
-
-        setBalance(newBalance);
-        setScanResult('success');
-        const ticketId = newDoc.id.slice(-6).toUpperCase();
-        setLastTicket({ id: ticketId, time: new Date() });
-        setShowVerifyModal(false);
-        setVerificationToken('');
-
-        // Trigger automatic POS print
-        setTimeout(() => {
-          window.print();
-        }, 500);
-
-        // Auto-reset for kiosk
-        if (isKiosk) {
-          setTimeout(() => setScanResult(null), 8000);
-        }
-      } catch (err) {
-        setScanResult('fail');
-        setShowVerifyModal(false);
-        setVerificationToken('');
-        
-        if (isKiosk) {
-          setTimeout(() => setScanResult(null), 5000);
-        }
-      } finally {
-        setIsVerifying(false);
       }
-    }, 1500);
+
+      const attendanceRef = collection(db, 'attendance');
+      const newDoc = await addDoc(attendanceRef, {
+        userId: profile.id,
+        userName: profile.name,
+        department: profile.department,
+        timestamp: serverTimestamp(),
+        mealType: getCurrentMealType(),
+      });
+
+      const userRef = doc(db, 'users', profile.id);
+      const newBalance = balance - 1;
+      await updateDoc(userRef, {
+        ticketsBalance: newBalance
+      });
+
+      setBalance(newBalance);
+      setScanResult('success');
+      const ticketId = newDoc.id.slice(-6).toUpperCase();
+      setLastTicket({ id: ticketId, time: new Date() });
+      setShowVerifyModal(false);
+      setVerificationToken('');
+
+      // Trigger automatic POS print
+      setTimeout(() => {
+        window.print();
+      }, 500);
+
+      // Auto-reset for kiosk
+      if (isKiosk) {
+        setTimeout(() => setScanResult(null), 8000);
+      }
+    } catch (err) {
+      setScanResult('fail');
+      setShowVerifyModal(false);
+      setVerificationToken('');
+      
+      if (isKiosk) {
+        setTimeout(() => setScanResult(null), 5000);
+      }
+    } finally {
+      setIsVerifying(false);
+    }
   }, [balance, profile, verificationToken, isKiosk]);
 
   // Hardware Scanner Integration
@@ -407,21 +417,5 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
         </div>
       )}
     </div>
-  );
-}
-
-function Loader2({ className }: { className?: string }) {
-  return (
-    <svg 
-      className={className} 
-      viewBox="0 0 24 24" 
-      fill="none" 
-      stroke="currentColor" 
-      strokeWidth="2" 
-      strokeLinecap="round" 
-      strokeLinejoin="round"
-    >
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
   );
 }

@@ -1,5 +1,6 @@
+import { enrollBiometrics } from '../lib/webauthnUtils';
 import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, deleteDoc, where } from 'firebase/firestore';
-import { BarChart3, FileText, Plus, Search, Users, CheckCircle2, XCircle, Trash2, ShieldCheck, Ticket } from 'lucide-react';
+import { BarChart3, FileText, Plus, Search, Users, CheckCircle2, XCircle, Trash2, ShieldCheck, Ticket, Fingerprint } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -358,15 +359,41 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="md:col-span-2 space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Biometric Token</label>
-                  <input 
-                    type="text" 
-                    value={newUser.biometricToken}
-                    onChange={(e) => setNewUser({...newUser, biometricToken: e.target.value})}
-                    className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
-                    placeholder="BIO-HASH-XXX"
-                    required
-                  />
+                  <label className="text-xs font-bold text-slate-400 uppercase">Biometric Registration</label>
+                  <div className="flex gap-4">
+                    <input 
+                      type="text" 
+                      value={newUser.biometricToken || ''}
+                      onChange={(e) => setNewUser({...newUser, biometricToken: e.target.value})}
+                      className="flex-1 px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono text-sm"
+                      placeholder="Fingerprint Token (Auto-generated)"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!newUser.name || !newUser.id) {
+                          alert("Please enter Name and Employee ID first.");
+                          return;
+                        }
+                        try {
+                          const cred = await enrollBiometrics(newUser.id, newUser.name);
+                          setNewUser({
+                            ...newUser,
+                            biometricToken: cred.credentialId, // Use credentialId as the primary token
+                            // We can store more if we want, but let's stick to update logic later
+                          });
+                          alert("Fingerprint scanned and linked!");
+                        } catch (err: any) {
+                          alert(err.message || "Scanning failed.");
+                        }
+                      }}
+                      className="px-6 py-3 bg-cyan-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-cyan-700 transition-colors"
+                    >
+                      <Fingerprint className="w-5 h-5" />
+                      Scan Finger
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400">Actual biometric data is stored securely in the browser/hardware. We only store a public identity token.</p>
                 </div>
                 <button 
                   type="submit"
@@ -688,6 +715,23 @@ export default function AdminDashboard() {
                                     </td>
                                     <td className="px-8 py-4 text-right">
                                         <div className="flex justify-end gap-2">
+                                            <button 
+                                                onClick={async () => {
+                                                  try {
+                                                    const cred = await enrollBiometrics(user.id, user.name);
+                                                    await updateDoc(doc(db, 'users', user.id), {
+                                                      biometricToken: cred.credentialId
+                                                    });
+                                                    alert("Biometrics updated for " + user.name);
+                                                  } catch (err: any) {
+                                                    alert(err.message || "Failed to link biometrics.");
+                                                  }
+                                                }}
+                                                className="p-2.5 bg-cyan-50 text-cyan-600 rounded-xl hover:bg-cyan-100 transition-colors"
+                                                title="Link/Update Biometrics"
+                                            >
+                                                <Fingerprint className="w-4 h-4" />
+                                            </button>
                                             <button 
                                                 onClick={() => requestDelete(user.id)}
                                                 className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"

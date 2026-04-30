@@ -10,6 +10,8 @@ export interface UserProfile {
   ticketsBalance: number;
   weeklyAllocation: number;
   biometricToken?: string;
+  webauthnCredentialId?: string;
+  webauthnPublicKey?: string;
   email?: string;
   createdAt: string;
 }
