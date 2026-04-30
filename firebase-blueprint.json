@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents an employee/user in the canteen system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "department": { "type": "string" },
+        "biometricToken": { "type": "string", "description": "Simulated fingerprint hash" },
+        "ticketsBalance": { "type": "integer" },
+        "weeklyAllocation": { "type": "integer" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "adminLevel": { "type": "integer", "description": "1 for Maker, 2 for Checker" },
+        "status": { "type": "string", "enum": ["pending_approval", "active", "pending_deletion"] },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "department", "role"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Record of a meal ticket being used.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "department": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "mealType": { "type": "string" }
+      },
+      "required": ["userId", "timestamp", "department"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root collection for users."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Collection for recording meal usage."
+    }
+  }
+}
