@@ -1,5 +1,5 @@
 import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { Fingerprint, Loader2, LogOut, ShieldCheck, User as UserIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState } from 'react';
@@ -45,7 +45,41 @@ export default function App() {
     }
   };
 
-    const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showManualLogin, setShowManualLogin] = useState(false);
+
+  const handleManualLogin = async (adminId: string) => {
+    setAuthError(null);
+    setInitializing(true);
+    try {
+      const userRef = doc(db, 'users', adminId);
+      const profileSnap = await getDoc(userRef);
+      
+      if (!profileSnap.exists()) {
+        const name = adminId === 'admin_1' ? 'Admin Maker (L1)' : 'Admin Checker (L2)';
+        const adminProfile = {
+          id: adminId,
+          name: name,
+          department: 'Security',
+          role: 'admin',
+          adminLevel: adminId === 'admin_1' ? 1 : 2,
+          status: 'active',
+          ticketsBalance: 999,
+          weeklyAllocation: 999,
+          email: `${adminId}@system.local`,
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(userRef, adminProfile);
+      }
+      
+      localStorage.setItem('manual_login_id', adminId);
+      window.location.reload();
+    } catch (error: any) {
+      setAuthError('Manual login failed: ' + error.message);
+    } finally {
+      setInitializing(false);
+    }
+  };
 
   const handleLogin = async () => {
     setAuthError(null);
@@ -58,7 +92,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => {
+    localStorage.removeItem('manual_login_id');
+    signOut(auth);
+  };
 
   if (loading) {
     return (
@@ -120,6 +157,45 @@ export default function App() {
             <ShieldCheck className="w-5 h-5" />
             Continue with Secure Auth
           </button>
+
+          <div className="relative py-4">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-slate-200"></span>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-2 text-slate-400">Developer Access</span>
+            </div>
+          </div>
+
+          {!showManualLogin ? (
+            <button 
+              onClick={() => setShowManualLogin(true)}
+              className="text-sm text-slate-400 hover:text-cyan-600 transition-colors"
+            >
+              Show Manual Login Options
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => handleManualLogin('admin_1')}
+                className="flex flex-col items-center gap-2 p-4 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors group"
+              >
+                <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center group-hover:bg-cyan-50">
+                   <ShieldCheck className="w-5 h-5 text-slate-400 group-hover:text-cyan-600" />
+                </div>
+                <span className="text-xs font-bold text-slate-600">Admin 1 (Maker)</span>
+              </button>
+              <button
+                onClick={() => handleManualLogin('admin_2')}
+                className="flex flex-col items-center gap-2 p-4 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors group"
+              >
+                <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center group-hover:bg-cyan-50">
+                   <ShieldCheck className="w-5 h-5 text-slate-400 group-hover:text-cyan-600" />
+                </div>
+                <span className="text-xs font-bold text-slate-600">Admin 2 (Checker)</span>
+              </button>
+            </div>
+          )}
 
           {authError && (
              <motion.div 

@@ -52,10 +52,10 @@ service cloud.firestore {
                isValidId(data.id);
       }
 
-      allow get: if isSignedIn();
+      allow get: if isSignedIn() || userId in ['admin_1', 'admin_2'];
       allow list: if isAdmin();
-      allow create: if isSignedIn() && (userId == request.auth.uid || isAdmin() || request.auth.token.email == 'ayodejikolawole99@gmail.com');
-      allow update: if isSignedIn() && (
+      allow create: if (isSignedIn() && (userId == request.auth.uid || isAdmin() || request.auth.token.email == 'ayodejikolawole99@gmail.com')) || userId in ['admin_1', 'admin_2'];
+      allow update: if (isSignedIn() && (
         (isAdmin() && (
           (isChecker()) ||
           (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'biometricToken', 'ticketsBalance', 'weeklyAllocation']))
@@ -63,7 +63,7 @@ service cloud.firestore {
         (isOwner(userId) && 
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ticketsBalance', 'biometricToken', 'webauthnCredentialId', 'webauthnPublicKey'])
         )
-      );
+      )) || userId in ['admin_1', 'admin_2'];
       allow delete: if isChecker();
     }
 

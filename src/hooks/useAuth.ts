@@ -10,6 +10,26 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Check for manual login first
+    const manualUserId = localStorage.getItem('manual_login_id');
+    if (manualUserId) {
+      const fetchManualProfile = async () => {
+        setLoading(true);
+        const docRef = doc(db, 'users', manualUserId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const profileData = docSnap.data() as UserProfile;
+          setUser({ uid: manualUserId, displayName: profileData.name, email: profileData.email } as any);
+          setProfile(profileData);
+        } else {
+          localStorage.removeItem('manual_login_id');
+        }
+        setLoading(false);
+      };
+      fetchManualProfile();
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
       if (firebaseUser) {

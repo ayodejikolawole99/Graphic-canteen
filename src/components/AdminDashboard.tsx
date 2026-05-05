@@ -232,38 +232,58 @@ export default function AdminDashboard() {
             <BarChart3 className="w-4 h-4" />
             Reports
           </button>
-          <button 
-            onClick={() => setActiveTab('enroll')}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              activeTab === 'enroll' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            <Plus className="w-4 h-4" />
-            Enrollment
-          </button>
-          <button 
-            onClick={() => setActiveTab('alloc')}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              activeTab === 'alloc' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            <Ticket className="w-4 h-4" />
-            Mass Allocation
-          </button>
-          <button 
-            onClick={() => setActiveTab('approvals')}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all relative ${
-              activeTab === 'approvals' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            Approvals
-            {(pendingUsers.length > 0 || deletionRequests.length > 0) && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] flex items-center justify-center rounded-full border-2 border-white">
-                {pendingUsers.length + deletionRequests.length}
-              </span>
-            )}
-          </button>
+          
+          {(currentAdmin?.adminLevel === 1 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
+            <>
+              <button 
+                onClick={() => setActiveTab('enroll')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'enroll' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <Plus className="w-4 h-4" />
+                Enrollment
+              </button>
+              <button 
+                onClick={() => setActiveTab('alloc')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'alloc' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <Ticket className="w-4 h-4" />
+                Mass Allocation
+              </button>
+            </>
+          )}
+
+          {(currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
+            <>
+              <button 
+                onClick={() => setActiveTab('approvals')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all relative ${
+                  activeTab === 'approvals' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Approvals
+                {(pendingUsers.length > 0 || deletionRequests.length > 0) && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] flex items-center justify-center rounded-full border-2 border-white">
+                    {pendingUsers.length + deletionRequests.length}
+                  </span>
+                )}
+              </button>
+              <button 
+                onClick={() => setActiveTab('permissions')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'permissions' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Roles & Permissions
+              </button>
+            </>
+          )}
+
           <button 
             onClick={() => setActiveTab('staff')}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
@@ -272,15 +292,6 @@ export default function AdminDashboard() {
           >
             <Users className="w-4 h-4" />
             Staff Management
-          </button>
-          <button 
-            onClick={() => setActiveTab('permissions')}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              activeTab === 'permissions' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            Roles & Permissions
           </button>
         </nav>
       </div>
@@ -426,7 +437,7 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {activeTab === 'enroll' && (
+        {activeTab === 'enroll' && (currentAdmin?.adminLevel === 1 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="enroll"
             initial={{ opacity: 0, x: 20 }}
@@ -557,7 +568,7 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {activeTab === 'alloc' && (
+        {activeTab === 'alloc' && (currentAdmin?.adminLevel === 1 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="alloc"
             initial={{ opacity: 0, x: 20 }}
@@ -644,7 +655,7 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {activeTab === 'approvals' && (
+        {activeTab === 'approvals' && (currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="approvals"
             initial={{ opacity: 0, y: 10 }}
@@ -754,7 +765,7 @@ export default function AdminDashboard() {
             </div>
           </motion.div>
         )}
-        {activeTab === 'permissions' && (
+        {activeTab === 'permissions' && (currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="permissions"
             initial={{ opacity: 0, y: 10 }}
