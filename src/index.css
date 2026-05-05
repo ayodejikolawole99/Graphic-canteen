@@ -11,10 +11,10 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 60%;
-  max-width: 800px;
-  opacity: 0.05;
-  filter: blur(20px);
+  width: 70%;
+  max-width: 900px;
+  opacity: 0.04;
+  filter: grayscale(1);
   pointer-events: none;
   z-index: -10;
 }

@@ -72,21 +72,92 @@ export async function enrollBiometrics(userId: string, userName: string) {
     };
   } catch (err: any) {
     console.error("Enrollment Error:", err);
-    if (err.name === 'NotAllowedError') throw new Error('Registration timed out or was cancelled by the user.');
+    if (err.name === 'NotAllowedError') throw new Error('Registration timed out or was cancelled by the user. Ensure you are using a secure browser.');
     if (err.name === 'InvalidStateError') throw new Error('This device or fingerprint is already registered.');
-    if (err.name === 'SecurityError') throw new Error('Security Error: WebAuthn requires HTTPS and matching domain.');
+    if (err.name === 'SecurityError') {
+      if (window.self !== window.top) {
+        throw new Error('Security Error: Biometrics are blocked in this frame. Please open the app in a new tab.');
+      }
+      throw new Error('Security Error: WebAuthn requires HTTPS and matching domain.');
+    }
+    if (err.name === 'NotSupportedError') throw new Error('Your browser supports the API, but this specific hardware/method is not supported.');
+    
+    // Fallback 1: Try SecuGen WebAPI (Official)
+    try {
+      const resp = await fetch("https://localhost:8443/SGICAP", { method: 'POST', body: JSON.stringify({ timeout: 10000, quality: 50, templateFormat: "ISO" }) }).catch(() => 
+                    fetch("http://localhost:8000/SGICAP?timeout=10000&quality=50&templateFormat=ISO"));
+      const data = await resp.json();
+      if (data && (data.ErrorCode === 0 || data.ErrorCode === "0")) {
+        return {
+          credentialId: "SG_" + data.TemplateBase64,
+          publicKey: "SECUGEN_WAPI_V1"
+        };
+      }
+    } catch (e) {
+      console.log("Official SecuGen WebAPI not available.");
+    }
+
+    // Fallback 2: Try Python Local Bridge (Custom)
+    try {
+      const resp = await fetch("http://localhost:5000/api/scan");
+      const data = await resp.json();
+      if (data.status === 'success') {
+        return {
+          credentialId: data.template,
+          publicKey: "SECUGEN_PY_BRIDGE"
+        };
+      }
+    } catch (e) {
+      console.log("Python Bridge not available.");
+    }
+
     throw err;
   }
 }
 
 export async function verifyBiometrics(credentialId: string) {
+  // Check if it's a SecuGen Token
+  if (credentialId.startsWith("SG_")) {
+    const storedTemplate = credentialId.replace("SG_", "");
+    try {
+      const resp = await fetch("https://localhost:8443/SGICAP", { method: 'POST', body: JSON.stringify({ timeout: 10000, quality: 50, templateFormat: "ISO" }) }).catch(() => 
+                    fetch("http://localhost:8000/SGICAP?timeout=10000&quality=50&templateFormat=ISO"));
+      const data = await resp.json();
+      if (data && (data.ErrorCode === 0 || data.ErrorCode === "0")) {
+        const newTemplate = data.TemplateBase64;
+        // Try official match
+        try {
+          const matchResp = await fetch(`http://localhost:8000/SGIMATCH?template1=${encodeURIComponent(storedTemplate)}&template2=${encodeURIComponent(newTemplate)}`).catch(() => 
+                              fetch(`https://localhost:8443/SGIMATCH`, { method: 'POST', body: JSON.stringify({ template1: storedTemplate, template2: newTemplate }) }));
+          const matchData = await matchResp.json();
+          const score = matchData.MatchingScore || matchData.score || 0;
+          if (score > 100) return true;
+        } catch (e) {
+          // If official fails, try the Python bridge match
+          const pyMatchResp = await fetch("http://localhost:5000/api/match", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ template1: storedTemplate, template2: newTemplate })
+          });
+          const pyMatchData = await pyMatchResp.json();
+          if (pyMatchData.match || pyMatchData.score > 100) return true;
+        }
+        throw new Error("Biometric mismatch. Please try scanning again.");
+      }
+      throw new Error("SecuGen Scanner Error: " + (data.ErrorMessage || "Unknown error"));
+    } catch (e: any) {
+      throw new Error("Scanner services not responding. Ensure either SecuGen WebAPI or Python Bridge is running.");
+    }
+  }
+
   if (!window.PublicKeyCredential) {
     throw new Error('Biometric scanning is not supported by this browser.');
   }
 
   // Generate a random challenge
   const challenge = new Uint8Array(32);
-  window.crypto.getRandomValues(challenge);
+  const crypto = window.crypto || (window as any).msCrypto;
+  crypto.getRandomValues(challenge);
 
   // The credential ID from navigator.credentials.create().id is base64url encoded.
   // We need to convert it to a buffer for the allowCredentials list.
@@ -116,7 +187,12 @@ export async function verifyBiometrics(credentialId: string) {
     console.error("Verification Error:", err);
     if (err.name === 'NotAllowedError') throw new Error('Biometric scan was cancelled or timed out.');
     if (err.name === 'NotSupportedError') throw new Error('Your hardware/browser doesn\'t support this security method.');
-    if (err.name === 'SecurityError') throw new Error('Security Error: WebAuthn requires a secure context (HTTPS).');
+    if (err.name === 'SecurityError') {
+      if (window.self !== window.top) {
+        throw new Error('Security Error: Biometrics are restricted in iframes. Please open the app in a new tab.');
+      }
+      throw new Error('Security Error: WebAuthn requires a secure context (HTTPS).');
+    }
     throw new Error(`Biometric hardware error: ${err.message}`);
   }
 }

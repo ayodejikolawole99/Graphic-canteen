@@ -52,11 +52,12 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
       return;
     }
 
-    // Determine if we should attempt a WebAuthn trigger or just wait for HID input
-    const isWebAuthn = profile.biometricToken && profile.biometricToken.length > 20;
+    // Determine the type of biometric stored
+    const isWebAuthn = profile.biometricToken && profile.biometricToken.length > 25 && !profile.biometricToken.startsWith('SG_');
+    const isSecuGen = profile.biometricToken?.startsWith('SG_');
 
-    // If we are manually triggering (empty token) and it's NOT WebAuthn, we just wait
-    if (token === '' && !isWebAuthn) {
+    // If we are manually triggering (empty token) and it's NOT a specialized HW, we just wait
+    if (token === '' && !isWebAuthn && !isSecuGen) {
       setShowVerifyModal(true);
       setIsVerifying(true); // Shows the scanning state
       setError(null);
@@ -70,12 +71,16 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
     if (typeof token === 'string' && token !== '') setVerificationToken(token);
 
     try {
-      // If no token was provided (manual confirm click), trigger WebAuthn
-      if (token === '' && isWebAuthn) {
-        try {
-          await verifyBiometrics(profile.biometricToken!);
-        } catch (authErr: any) {
-          throw authErr; // already handled in webauthnUtils, just rethrow
+      // If no token was provided (manual confirm click), trigger the appropriate hardware
+      if (token === '') {
+        if (isWebAuthn || isSecuGen) {
+          try {
+            await verifyBiometrics(profile.biometricToken!);
+          } catch (authErr: any) {
+            throw authErr;
+          }
+        } else {
+           throw new Error('Please scan your biometric device.');
         }
       } else if (token !== '') {
         // HID Scanner or manual entry check
@@ -208,6 +213,32 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
               <span>Weekly Cap: {profile.weeklyAllocation}</span>
               <span>Status: Active</span>
             </div>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-slate-100">
+            <button 
+              onClick={async () => {
+                const message = `Authentication method: ${profile.biometricToken?.length && profile.biometricToken.length > 25 ? (profile.biometricToken.startsWith('SG_') ? 'SecuGen WebAPI' : 'Internal Biometric (WebAuthn)') : 'External USB Scanner'}\n\nTechnical Details:\n- WebAuthn Support: ${!!window.PublicKeyCredential}\n- Origin: ${window.location.hostname}\n- Secure Context: ${window.isSecureContext}\n- In Iframe: ${window.self !== window.top}\n\nSecuGen WebAPI Check:\n`;
+                
+                try {
+                  const wapiResp = await fetch("http://localhost:8000/SGICAP?timeout=100").catch(() => null);
+                  const pyResp = await fetch("http://localhost:5000/api/scan").catch(() => null);
+                  
+                  if (wapiResp) {
+                    alert(message + "✅ SecuGen WebAPI DETECTED on port 8000.\n\nYour scanner should communicate properly.");
+                  } else if (pyResp) {
+                    alert(message + "✅ SECUGEN PYTHON BRIDGE DETECTED on port 5000.\n\nConnection is working!");
+                  } else {
+                    alert(message + "❌ NO SCANNER BRIDGE detected locally.\n\nIf using SecuGen, please ensure either the WebAPI service or the custom Python Bridge is running on your PC.");
+                  }
+                } catch (e) {
+                   alert(message + "❌ SecuGen Service unreachable.\n\nNote: If using built-in biometrics, please open in a NEW TAB.");
+                }
+              }}
+              className="w-full py-2 bg-slate-50 text-slate-400 text-[10px] font-bold uppercase tracking-wider rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              Troubleshoot Scanner
+            </button>
           </div>
         </div>
 

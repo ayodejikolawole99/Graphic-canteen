@@ -13,23 +13,22 @@ interface ScannerOptions {
 export function useHardwareScanner({ onScan, minChars = 4, timeGap = 50 }: ScannerOptions) {
   const buffer = useRef<string>('');
   const lastKeyTime = useRef<number>(0);
+  const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if user is typing in an input field normally
-      if (
+      const isInput = 
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement
-      ) {
-        // Special case: if we are in the verification modal, we might want to capture there
-        // but generally, P&P scanners work best when they "just work" anywhere.
-      }
+        e.target instanceof HTMLSelectElement;
 
       const currentTime = Date.now();
       
-      // If the gap between keys is too long, it's a human typing, reset
+      // If the gap between keys is too long, it might be a human typing
+      // But we still want to capture if it's the start of a sequence
       if (buffer.current.length > 0 && currentTime - lastKeyTime.current > timeGap) {
+        // Reset if too long gap
         buffer.current = '';
       }
 
@@ -37,18 +36,38 @@ export function useHardwareScanner({ onScan, minChars = 4, timeGap = 50 }: Scann
 
       if (e.key === 'Enter') {
         if (buffer.current.length >= minChars) {
+          console.log("Hardware Scan Detected (Enter):", buffer.current);
           onScan(buffer.current);
           buffer.current = '';
           e.preventDefault();
         } else {
           buffer.current = '';
         }
+        if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       } else if (e.key.length === 1) {
-        buffer.current += e.key;
+        // Only append if it's not an input field, or if we want global capture
+        if (!isInput) {
+          buffer.current += e.key;
+          
+          // Clear previous timeout
+          if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+          
+          // Set a timeout to trigger scan if no 'Enter' is sent but sequence stops
+          timeoutRef.current = window.setTimeout(() => {
+            if (buffer.current.length >= minChars) {
+              console.log("Hardware Scan Detected (Timeout):", buffer.current);
+              onScan(buffer.current);
+            }
+            buffer.current = '';
+          }, 200); // 200ms of silence after a burst triggers the scan
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+    };
   }, [onScan, minChars, timeGap]);
 }

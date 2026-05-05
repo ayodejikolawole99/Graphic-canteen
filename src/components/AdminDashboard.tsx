@@ -1,12 +1,25 @@
 import { enrollBiometrics } from '../lib/webauthnUtils';
 import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, deleteDoc, where } from 'firebase/firestore';
-import { BarChart3, FileText, Plus, Search, Users, CheckCircle2, XCircle, Trash2, ShieldCheck, Ticket, Fingerprint } from 'lucide-react';
+import { BarChart3, FileText, Plus, Search, Users, CheckCircle2, XCircle, Trash2, ShieldCheck, Ticket, Fingerprint, Download, Table, Cpu } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import 'jspdf-autotable';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { AttendanceRecord, UserProfile } from '../types';
 import { useAuth } from '../hooks/useAuth';
+
+const DEPARTMENTS = [
+  "White collar staff",
+  "Blue collar staff",
+  "Delog",
+  "Tuskeegee",
+  "Medical"
+];
 
 export default function AdminDashboard() {
   const { profile: currentAdmin } = useAuth();
@@ -15,6 +28,7 @@ export default function AdminDashboard() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   
   // New User Form State
   const [newUser, setNewUser] = useState({
@@ -29,6 +43,7 @@ export default function AdminDashboard() {
   const [batchAlloc, setBatchAlloc] = useState({
     department: '',
     amount: 5,
+    mode: 'add' as 'add' | 'subtract',
     isProcessing: false
   });
 
@@ -106,14 +121,18 @@ export default function AdminDashboard() {
     
     try {
       const usersToUpdate = users.filter(u => u.department === batchAlloc.department && u.status === 'active');
-      const updates = usersToUpdate.map(user => 
-        updateDoc(doc(db, 'users', user.id), {
-          ticketsBalance: user.ticketsBalance + batchAlloc.amount
-        })
-      );
+      const updates = usersToUpdate.map(user => {
+        const adjustment = batchAlloc.mode === 'add' ? batchAlloc.amount : -batchAlloc.amount;
+        // Ensure balance doesn't go below 0
+        const newBalance = Math.max(0, user.ticketsBalance + adjustment);
+        return updateDoc(doc(db, 'users', user.id), {
+          ticketsBalance: newBalance
+        });
+      });
       
       await Promise.all(updates);
-      alert(`Successfully allocated ${batchAlloc.amount} tickets to ${usersToUpdate.length} staff in ${batchAlloc.department}`);
+      const actionText = batchAlloc.mode === 'add' ? 'allocated' : 'reduced';
+      alert(`Successfully ${actionText} tickets for ${usersToUpdate.length} staff in ${batchAlloc.department}`);
       setBatchAlloc(prev => ({ ...prev, department: '', isProcessing: false }));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'users/batch');
@@ -121,12 +140,72 @@ export default function AdminDashboard() {
     }
   };
 
+  const getFilteredAttendance = () => {
+    if (selectedDepartments.length === 0) return attendance;
+    return attendance.filter(record => selectedDepartments.includes(record.department));
+  };
+
   const getDepartmentStats = () => {
     const stats: Record<string, number> = {};
-    attendance.forEach(record => {
+    const dataToStat = getFilteredAttendance();
+    dataToStat.forEach(record => {
       stats[record.department] = (stats[record.department] || 0) + 1;
     });
     return Object.entries(stats).map(([name, value]) => ({ name, value }));
+  };
+
+  const exportToCSV = () => {
+    const filtered = getFilteredAttendance();
+    const data = filtered.map(record => ({
+      Employee: record.userName,
+      Department: record.department,
+      MealType: record.mealType,
+      Timestamp: record.timestamp?.toDate().toLocaleString() || ''
+    }));
+    const csv = Papa.unparse(data);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `attendance_report_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToExcel = () => {
+    const filtered = getFilteredAttendance();
+    const data = filtered.map(record => ({
+      Employee: record.userName,
+      Department: record.department,
+      MealType: record.mealType,
+      Timestamp: record.timestamp?.toDate().toLocaleString() || ''
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+    XLSX.writeFile(workbook, `attendance_report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportToPDF = () => {
+    const filtered = getFilteredAttendance();
+    const doc = new jsPDF();
+    doc.text("Attendance Report", 14, 15);
+    const tableColumn = ["Employee", "Department", "Meal Type", "Timestamp"];
+    const tableRows = filtered.map(record => [
+      record.userName,
+      record.department,
+      record.mealType,
+      record.timestamp?.toDate().toLocaleString() || ''
+    ]);
+
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 20,
+    });
+    doc.save(`attendance_report_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const pendingUsers = users.filter(u => u.status === 'pending_approval');
@@ -240,10 +319,63 @@ export default function AdminDashboard() {
               <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                   <h3 className="font-bold text-slate-900 text-lg">Live Attendance Logs</h3>
-                  <button className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-colors">
-                    <FileText className="w-4 h-4" />
-                    Export CSV
-                  </button>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex flex-wrap gap-1">
+                      {DEPARTMENTS.map(dept => (
+                        <button
+                          key={dept}
+                          onClick={() => {
+                            setSelectedDepartments(prev => 
+                              prev.includes(dept) 
+                                ? prev.filter(d => d !== dept) 
+                                : [...prev, dept]
+                            );
+                          }}
+                          className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border ${
+                            selectedDepartments.includes(dept)
+                              ? 'bg-cyan-600 border-cyan-600 text-white shadow-sm'
+                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-300'
+                          }`}
+                        >
+                          {dept}
+                        </button>
+                      ))}
+                      {selectedDepartments.length > 0 && (
+                        <button
+                          onClick={() => setSelectedDepartments([])}
+                          className="px-3 py-1 rounded-full text-[10px] font-bold bg-white border border-red-200 text-red-500 hover:bg-red-50 transition-all"
+                        >
+                          Clear Filters
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2 ml-auto">
+                      <button 
+                        onClick={exportToCSV}
+                        className="px-3 py-2 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
+                        title="Export CSV"
+                      >
+                        <FileText className="w-4 h-4" />
+                        CSV
+                      </button>
+                      <button 
+                        onClick={exportToExcel}
+                        className="px-3 py-2 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
+                        title="Export Excel"
+                      >
+                        <Table className="w-4 h-4" />
+                        XLSX
+                      </button>
+                      <button 
+                        onClick={exportToPDF}
+                        className="px-3 py-2 bg-slate-100 hover:bg-red-50 hover:text-red-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
+                        title="Export PDF"
+                      >
+                        <Download className="w-4 h-4" />
+                        PDF
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div className="max-h-[500px] overflow-y-auto">
                   <table className="w-full text-left">
@@ -256,7 +388,7 @@ export default function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {attendance.sort((a, b) => b.timestamp?.toMillis() - a.timestamp?.toMillis()).map(record => (
+                      {getFilteredAttendance().sort((a, b) => b.timestamp?.toMillis() - a.timestamp?.toMillis()).map(record => (
                         <tr key={record.id} className="hover:bg-slate-50/50">
                           <td className="px-8 py-4 text-sm font-bold text-slate-900">{record.userName}</td>
                           <td className="px-8 py-4">
@@ -340,11 +472,9 @@ export default function AdminDashboard() {
                     required
                   >
                     <option value="">Select Department</option>
-                    <option value="White collar staff">White collar staff</option>
-                    <option value="Blue collar staff">Blue collar staff</option>
-                    <option value="Delog">Delog</option>
-                    <option value="Tuskeegee">Tuskeegee</option>
-                    <option value="Medical">Medical</option>
+                    {DEPARTMENTS.map(dept => (
+                      <option key={dept} value={dept}>{dept}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -389,6 +519,31 @@ export default function AdminDashboard() {
                       <Fingerprint className="w-5 h-5" />
                       {newUser.biometricToken ? 'Rescan Finger' : 'Scan Finger'}
                     </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const message = `WebAuthn Support: ${!!window.PublicKeyCredential}\nSecure Context: ${window.isSecureContext}\nIn Iframe: ${window.self !== window.top}\nOrigin: ${window.location.hostname}\n\nSecuGen WebAPI Check:\nScanning localhost:8000...\n`;
+                        
+                        try {
+                          const wapiResp = await fetch("http://localhost:8000/SGICAP?timeout=100").catch(() => null);
+                          const pyResp = await fetch("http://localhost:5000/api/scan").catch(() => null);
+                          
+                          if (wapiResp) {
+                            alert(message + "✅ SecuGen WebAPI DETECTED on port 8000.\n\nYour scanner should work directly!");
+                          } else if (pyResp) {
+                            alert(message + "✅ SECUGEN PYTHON BRIDGE DETECTED on port 5000.\n\nHardware connection is stable!");
+                          } else {
+                            alert(message + "❌ NO SCANNER BRIDGE DETECTED.\n\nTo use SecuGen Hamster Plus:\n1. Ensure 'SecuGen WebAPI' is running (Port 8000)\n2. OR Run the 'secugen_bridge.py' script (Port 5000)");
+                          }
+                        } catch (e) {
+                          alert(message + "❌ Service Error.\n\nTip: You need a local script or service to bridge the USB hardware to the web browser.");
+                        }
+                      }}
+                      className="px-4 py-3 bg-slate-100 text-slate-400 rounded-2xl hover:bg-slate-200 transition-colors"
+                      title="Check hardware compatibility"
+                    >
+                      <Cpu className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
                 <button 
@@ -415,11 +570,30 @@ export default function AdminDashboard() {
                 <div className="w-16 h-16 bg-cyan-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Ticket className="w-8 h-8 text-cyan-600" />
                 </div>
-                <h2 className="text-2xl font-bold text-slate-900">Mass Ticket Refill</h2>
-                <p className="text-slate-500">Allocate tickets to an entire department instantly.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Mass Ticket Management</h2>
+                <p className="text-slate-500">Allocate or reduce tickets for an entire department instantly.</p>
               </div>
 
               <div className="space-y-6">
+                <div className="flex bg-slate-50 p-1.5 rounded-2xl border border-slate-100 gap-1 mb-6">
+                   <button
+                    onClick={() => setBatchAlloc({...batchAlloc, mode: 'add'})}
+                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+                      batchAlloc.mode === 'add' ? 'bg-white text-cyan-600 shadow-md border border-slate-100' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                   >
+                     Add/Allocate
+                   </button>
+                   <button
+                    onClick={() => setBatchAlloc({...batchAlloc, mode: 'subtract'})}
+                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+                      batchAlloc.mode === 'subtract' ? 'bg-white text-red-600 shadow-md border border-slate-100' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                   >
+                     Deduct/Reduce
+                   </button>
+                </div>
+
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-400 uppercase">Target Department</label>
@@ -429,15 +603,15 @@ export default function AdminDashboard() {
                       className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500"
                     >
                       <option value="">Select Department...</option>
-                      <option value="White collar staff">White collar staff</option>
-                      <option value="Blue collar staff">Blue collar staff</option>
-                      <option value="Delog">Delog</option>
-                      <option value="Tuskeegee">Tuskeegee</option>
-                      <option value="Medical">Medical</option>
+                      {DEPARTMENTS.map(dept => (
+                        <option key={dept} value={dept}>{dept}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase">Refill Amount</label>
+                    <label className="text-xs font-bold text-slate-400 uppercase">
+                      {batchAlloc.mode === 'add' ? 'Refill Amount' : 'Reduction Amount'}
+                    </label>
                     <input 
                       type="number"
                       value={batchAlloc.amount}
@@ -448,8 +622,8 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                  <p className="text-xs text-blue-700 font-medium">
+                <div className={`p-4 rounded-2xl border ${batchAlloc.mode === 'add' ? 'bg-blue-50 border-blue-100' : 'bg-red-50 border-red-100'}`}>
+                  <p className={`text-xs font-medium ${batchAlloc.mode === 'add' ? 'text-blue-700' : 'text-red-700'}`}>
                     This will affect {users.filter(u => u.department === batchAlloc.department && u.status === 'active').length} staff members.
                   </p>
                 </div>
@@ -457,9 +631,13 @@ export default function AdminDashboard() {
                 <button 
                   onClick={handleBatchAllocation}
                   disabled={batchAlloc.isProcessing || !batchAlloc.department}
-                  className="w-full py-5 bg-cyan-600 text-white rounded-2xl font-bold hover:bg-cyan-700 disabled:opacity-50 transition-all shadow-lg shadow-cyan-100"
+                  className={`w-full py-5 text-white rounded-2xl font-bold disabled:opacity-50 transition-all shadow-lg ${
+                    batchAlloc.mode === 'add' 
+                      ? 'bg-cyan-600 hover:bg-cyan-700 shadow-cyan-100' 
+                      : 'bg-red-600 hover:bg-red-700 shadow-red-100'
+                  }`}
                 >
-                  {batchAlloc.isProcessing ? 'Processing Batch...' : 'Confirm Mass Allocation'}
+                  {batchAlloc.isProcessing ? 'Processing Batch...' : `Confirm Mass ${batchAlloc.mode === 'add' ? 'Allocation' : 'Reduction'}`}
                 </button>
               </div>
             </div>
