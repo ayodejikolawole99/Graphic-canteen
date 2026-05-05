@@ -24,6 +24,36 @@ function base64ToBuffer(base64: string): ArrayBuffer {
 }
 
 export async function enrollBiometrics(userId: string, userName: string) {
+  // 1. Try SecuGen WebAPI (Official)
+  try {
+    const resp = await fetch("http://localhost:8000/SGICAP?timeout=10000&quality=50&templateFormat=ISO").catch(() => 
+                  fetch("https://localhost:8443/SGICAP", { method: 'POST', body: JSON.stringify({ timeout: 10000, quality: 50, templateFormat: "ISO" }) }));
+    const data = await resp.json();
+    if (data && (data.ErrorCode === 0 || data.ErrorCode === "0")) {
+      return {
+        credentialId: "SG_" + data.TemplateBase64,
+        publicKey: "SECUGEN_WAPI_V1"
+      };
+    }
+  } catch (e) {
+    console.log("Official SecuGen WebAPI not responding, checking Python bridge...");
+  }
+
+  // 2. Try Python Local Bridge (Custom)
+  try {
+    const resp = await fetch("http://localhost:5000/api/scan");
+    const data = await resp.json();
+    if (data.status === 'success') {
+      return {
+        credentialId: data.template,
+        publicKey: "SECUGEN_PY_BRIDGE"
+      };
+    }
+  } catch (e) {
+    console.log("Python Bridge not available. Falling back to browser passkeys.");
+  }
+
+  // 3. Fallback to standard Browser Passkeys (WebAuthn)
   if (!window.PublicKeyCredential) {
     throw new Error('Biometric scanning is not supported by this browser.');
   }
@@ -81,36 +111,6 @@ export async function enrollBiometrics(userId: string, userName: string) {
       throw new Error('Security Error: WebAuthn requires HTTPS and matching domain.');
     }
     if (err.name === 'NotSupportedError') throw new Error('Your browser supports the API, but this specific hardware/method is not supported.');
-    
-    // Fallback 1: Try SecuGen WebAPI (Official)
-    try {
-      const resp = await fetch("https://localhost:8443/SGICAP", { method: 'POST', body: JSON.stringify({ timeout: 10000, quality: 50, templateFormat: "ISO" }) }).catch(() => 
-                    fetch("http://localhost:8000/SGICAP?timeout=10000&quality=50&templateFormat=ISO"));
-      const data = await resp.json();
-      if (data && (data.ErrorCode === 0 || data.ErrorCode === "0")) {
-        return {
-          credentialId: "SG_" + data.TemplateBase64,
-          publicKey: "SECUGEN_WAPI_V1"
-        };
-      }
-    } catch (e) {
-      console.log("Official SecuGen WebAPI not available.");
-    }
-
-    // Fallback 2: Try Python Local Bridge (Custom)
-    try {
-      const resp = await fetch("http://localhost:5000/api/scan");
-      const data = await resp.json();
-      if (data.status === 'success') {
-        return {
-          credentialId: data.template,
-          publicKey: "SECUGEN_PY_BRIDGE"
-        };
-      }
-    } catch (e) {
-      console.log("Python Bridge not available.");
-    }
-
     throw err;
   }
 }
