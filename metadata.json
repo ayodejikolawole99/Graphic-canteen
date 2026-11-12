@@ -1,6 +1,6 @@
 {
   "name": "Canteen Biometrics Pro",
-  "description": "A comprehensive biometric canteen management system with user scanning, ticket allocation, and administrative reporting.",
-  "requestFramePermissions": ["publickey-credentials-create", "publickey-credentials-get"],
+  "description": "A comprehensive RFID card canteen management system with contactless card scanning, employment type and department allocation, and administrative reporting.",
+  "requestFramePermissions": [],
   "majorCapabilities": []
 }

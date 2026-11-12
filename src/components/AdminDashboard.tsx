@@ -1,6 +1,25 @@
-import { enrollBiometrics } from '../lib/webauthnUtils';
 import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, deleteDoc, where } from 'firebase/firestore';
-import { BarChart3, FileText, Plus, Search, Users, CheckCircle2, XCircle, Trash2, ShieldCheck, Ticket, Fingerprint, Download, Table, Cpu } from 'lucide-react';
+import { 
+  BarChart3, 
+  FileText, 
+  Plus, 
+  Search, 
+  Users, 
+  CheckCircle2, 
+  XCircle, 
+  Trash2, 
+  ShieldCheck, 
+  Ticket, 
+  Download, 
+  Table, 
+  CreditCard, 
+  Radio, 
+  Sparkles,
+  Link,
+  Check,
+  Building2,
+  Briefcase
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -12,14 +31,9 @@ import 'jspdf-autotable';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { AttendanceRecord, UserProfile } from '../types';
 import { useAuth } from '../hooks/useAuth';
-
-const DEPARTMENTS = [
-  "White collar staff",
-  "Blue collar staff",
-  "Delog",
-  "Tuskeegee",
-  "Medical"
-];
+import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { playSuccessChime, playTapBeep } from '../lib/audio';
+import { DEPARTMENTS, EMPLOYMENT_TYPES } from '../constants';
 
 export default function AdminDashboard() {
   const { profile: currentAdmin } = useAuth();
@@ -28,24 +42,35 @@ export default function AdminDashboard() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   
-  // New User Form State
+  // Filtering for reports
+  const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
+  const [selectedEmploymentTypes, setSelectedEmploymentTypes] = useState<string[]>([]);
+  const [reportChartGrouping, setReportChartGrouping] = useState<'department' | 'employmentType'>('department');
+  
+  // New User Form State with split: Employment Type + Department
   const [newUser, setNewUser] = useState({
     id: '',
     name: '',
-    department: '',
+    employmentType: 'White collar staff' as string,
+    department: 'HR' as string,
     role: 'user' as const,
     weeklyAllocation: 5,
-    biometricToken: '',
+    rfidCardId: '',
   });
 
+  // Mass Allocation State (split by Department or Employment Type)
   const [batchAlloc, setBatchAlloc] = useState({
-    department: '',
+    targetType: 'department' as 'department' | 'employmentType',
+    targetValue: '',
     amount: 5,
     mode: 'add' as 'add' | 'subtract',
     isProcessing: false
   });
+
+  // Modal state for linking RFID card to an existing user
+  const [linkingRfidUser, setLinkingRfidUser] = useState<UserProfile | null>(null);
+  const [scannedModalCard, setScannedModalCard] = useState<string>('');
 
   useEffect(() => {
     const qUsers = query(collection(db, 'users'));
@@ -67,22 +92,81 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  // Hardware Scanner for Admin Enrollment / Quick Assign
+  useHardwareScanner({
+    onScan: (token) => {
+      playTapBeep();
+      if (linkingRfidUser) {
+        setScannedModalCard(token);
+      } else if (activeTab === 'enroll') {
+        setNewUser(prev => ({ ...prev, rfidCardId: token }));
+      }
+    },
+    minChars: 3
+  });
+
+  const isCollarStaff = (type: string) => type === 'White collar staff' || type === 'Blue collar staff';
+
   const handleEnrollUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUser.id || !newUser.name) return;
+    const isCollar = isCollarStaff(newUser.employmentType);
+    const finalDepartment = isCollar ? (newUser.department || 'HR') : newUser.employmentType;
+
+    if (!newUser.id || !newUser.name || !newUser.employmentType) {
+      alert("Please fill in Employee ID and Full Name.");
+      return;
+    }
+
+    if (isCollar && !newUser.department) {
+      alert("Please select a Department for White/Blue collar staff.");
+      return;
+    }
 
     try {
+      const finalRfid = newUser.rfidCardId.trim() || `RFID-${newUser.id}`;
+
       await setDoc(doc(db, 'users', newUser.id), {
-        ...newUser,
+        id: newUser.id.trim(),
+        name: newUser.name.trim(),
+        employmentType: newUser.employmentType,
+        department: finalDepartment,
+        role: newUser.role,
+        rfidCardId: finalRfid,
         ticketsBalance: newUser.weeklyAllocation,
+        weeklyAllocation: newUser.weeklyAllocation,
         status: 'pending_approval',
         createdAt: new Date().toISOString(),
       });
-      alert("User enrollment submitted for approval.");
-      setNewUser({ id: '', name: '', department: '', role: 'user', weeklyAllocation: 5, biometricToken: '' });
+
+      alert(`Staff enrollment for ${newUser.name} submitted for approval with RFID Card: ${finalRfid}.`);
+      setNewUser({ 
+        id: '', 
+        name: '', 
+        employmentType: 'White collar staff', 
+        department: 'HR', 
+        role: 'user', 
+        weeklyAllocation: 5, 
+        rfidCardId: '' 
+      });
       setActiveTab('approvals');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'users');
+    }
+  };
+
+  const handleSaveRfidAssignment = async () => {
+    if (!linkingRfidUser || !scannedModalCard.trim()) return;
+    try {
+      await updateDoc(doc(db, 'users', linkingRfidUser.id), {
+        rfidCardId: scannedModalCard.trim(),
+        rfidCardAssignedAt: new Date().toISOString()
+      });
+      playSuccessChime();
+      alert(`RFID Card ${scannedModalCard} successfully linked to ${linkingRfidUser.name}!`);
+      setLinkingRfidUser(null);
+      setScannedModalCard('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${linkingRfidUser.id}`);
     }
   };
 
@@ -116,14 +200,21 @@ export default function AdminDashboard() {
   };
 
   const handleBatchAllocation = async () => {
-    if (!batchAlloc.department) return;
+    if (!batchAlloc.targetValue) return;
     setBatchAlloc(prev => ({ ...prev, isProcessing: true }));
     
     try {
-      const usersToUpdate = users.filter(u => u.department === batchAlloc.department && u.status === 'active');
+      const usersToUpdate = users.filter(u => {
+        if (u.status !== 'active') return false;
+        if (batchAlloc.targetType === 'department') {
+          return u.department === batchAlloc.targetValue;
+        } else {
+          return u.employmentType === batchAlloc.targetValue;
+        }
+      });
+
       const updates = usersToUpdate.map(user => {
         const adjustment = batchAlloc.mode === 'add' ? batchAlloc.amount : -batchAlloc.amount;
-        // Ensure balance doesn't go below 0
         const newBalance = Math.max(0, user.ticketsBalance + adjustment);
         return updateDoc(doc(db, 'users', user.id), {
           ticketsBalance: newBalance
@@ -132,8 +223,8 @@ export default function AdminDashboard() {
       
       await Promise.all(updates);
       const actionText = batchAlloc.mode === 'add' ? 'allocated' : 'reduced';
-      alert(`Successfully ${actionText} tickets for ${usersToUpdate.length} staff in ${batchAlloc.department}`);
-      setBatchAlloc(prev => ({ ...prev, department: '', isProcessing: false }));
+      alert(`Successfully ${actionText} tickets for ${usersToUpdate.length} staff in ${batchAlloc.targetValue}`);
+      setBatchAlloc(prev => ({ ...prev, targetValue: '', isProcessing: false }));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'users/batch');
       setBatchAlloc(prev => ({ ...prev, isProcessing: false }));
@@ -141,16 +232,25 @@ export default function AdminDashboard() {
   };
 
   const getFilteredAttendance = () => {
-    if (selectedDepartments.length === 0) return attendance;
-    return attendance.filter(record => selectedDepartments.includes(record.department));
+    return attendance.filter(record => {
+      const matchesDept = selectedDepartments.length === 0 || selectedDepartments.includes(record.department);
+      const matchesType = selectedEmploymentTypes.length === 0 || 
+        (record.employmentType && selectedEmploymentTypes.includes(record.employmentType));
+      return matchesDept && matchesType;
+    });
   };
 
-  const getDepartmentStats = () => {
+  const getFeedingStats = () => {
     const stats: Record<string, number> = {};
     const dataToStat = getFilteredAttendance();
+
     dataToStat.forEach(record => {
-      stats[record.department] = (stats[record.department] || 0) + 1;
+      const key = reportChartGrouping === 'department' 
+        ? (record.department || 'Other') 
+        : (record.employmentType || 'Unspecified');
+      stats[key] = (stats[key] || 0) + 1;
     });
+
     return Object.entries(stats).map(([name, value]) => ({ name, value }));
   };
 
@@ -159,7 +259,9 @@ export default function AdminDashboard() {
     const data = filtered.map(record => ({
       Employee: record.userName,
       Department: record.department,
+      EmploymentType: record.employmentType || '',
       MealType: record.mealType,
+      AuthMethod: 'RFID Card',
       Timestamp: record.timestamp?.toDate().toLocaleString() || ''
     }));
     const csv = Papa.unparse(data);
@@ -179,7 +281,9 @@ export default function AdminDashboard() {
     const data = filtered.map(record => ({
       Employee: record.userName,
       Department: record.department,
+      EmploymentType: record.employmentType || '',
       MealType: record.mealType,
+      AuthMethod: 'RFID Card',
       Timestamp: record.timestamp?.toDate().toLocaleString() || ''
     }));
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -191,11 +295,12 @@ export default function AdminDashboard() {
   const exportToPDF = () => {
     const filtered = getFilteredAttendance();
     const doc = new jsPDF();
-    doc.text("Attendance Report", 14, 15);
-    const tableColumn = ["Employee", "Department", "Meal Type", "Timestamp"];
+    doc.text("Attendance Report - Graphic Packaging Canteen", 14, 15);
+    const tableColumn = ["Employee", "Department", "Employment Type", "Meal Type", "Timestamp"];
     const tableRows = filtered.map(record => [
       record.userName,
       record.department,
+      record.employmentType || 'N/A',
       record.mealType,
       record.timestamp?.toDate().toLocaleString() || ''
     ]);
@@ -214,6 +319,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Header bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-200">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Admin Control Center</h1>
@@ -242,7 +348,7 @@ export default function AdminDashboard() {
                 }`}
               >
                 <Plus className="w-4 h-4" />
-                Enrollment
+                Staff Enrollment
               </button>
               <button 
                 onClick={() => setActiveTab('alloc')}
@@ -256,32 +362,31 @@ export default function AdminDashboard() {
             </>
           )}
 
+          <button 
+            onClick={() => setActiveTab('approvals')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all relative ${
+              activeTab === 'approvals' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            Approvals
+            {(pendingUsers.length > 0 || deletionRequests.length > 0) && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] flex items-center justify-center rounded-full border-2 border-white">
+                {pendingUsers.length + deletionRequests.length}
+              </span>
+            )}
+          </button>
+
           {(currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
-            <>
-              <button 
-                onClick={() => setActiveTab('approvals')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all relative ${
-                  activeTab === 'approvals' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-                }`}
-              >
-                <ShieldCheck className="w-4 h-4" />
-                Approvals
-                {(pendingUsers.length > 0 || deletionRequests.length > 0) && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] flex items-center justify-center rounded-full border-2 border-white">
-                    {pendingUsers.length + deletionRequests.length}
-                  </span>
-                )}
-              </button>
-              <button 
-                onClick={() => setActiveTab('permissions')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
-                  activeTab === 'permissions' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
-                }`}
-              >
-                <ShieldCheck className="w-4 h-4" />
-                Roles & Permissions
-              </button>
-            </>
+            <button 
+              onClick={() => setActiveTab('permissions')}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                activeTab === 'permissions' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              Roles & Permissions
+            </button>
           )}
 
           <button 
@@ -291,12 +396,13 @@ export default function AdminDashboard() {
             }`}
           >
             <Users className="w-4 h-4" />
-            Staff Management
+            Personnel & RFID Cards
           </button>
         </nav>
       </div>
 
       <AnimatePresence mode="wait">
+        {/* REPORTS TAB */}
         {activeTab === 'reports' && (
           <motion.div 
             key="reports"
@@ -306,46 +412,106 @@ export default function AdminDashboard() {
             className="grid grid-cols-1 lg:grid-cols-3 gap-8"
           >
             <div className="lg:col-span-2 space-y-6">
+              {/* Feeding Chart */}
               <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-8 text-lg">
-                  <BarChart3 className="w-6 h-6 text-cyan-600" />
-                  Feeding by Department
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2 text-lg">
+                    <BarChart3 className="w-6 h-6 text-cyan-600" />
+                    Feeding Statistics
+                  </h3>
+                  
+                  {/* Toggle Chart Grouping: Department vs Employment Type */}
+                  <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                    <button
+                      onClick={() => setReportChartGrouping('department')}
+                      className={`px-3 py-1.5 rounded-lg transition-colors ${
+                        reportChartGrouping === 'department'
+                          ? 'bg-white text-cyan-600 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      By Department
+                    </button>
+                    <button
+                      onClick={() => setReportChartGrouping('employmentType')}
+                      className={`px-3 py-1.5 rounded-lg transition-colors ${
+                        reportChartGrouping === 'employmentType'
+                          ? 'bg-white text-cyan-600 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      By Employment Type
+                    </button>
+                  </div>
+                </div>
+
                 <div className="h-80 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={getDepartmentStats()}>
+                    <BarChart data={getFeedingStats()}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} />
                       <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
                       <Tooltip 
                         contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
                         cursor={{ fill: '#f8fafc' }}
                       />
-                      <Bar dataKey="value" fill="#0891b2" radius={[6, 6, 0, 0]} barSize={48} />
+                      <Bar dataKey="value" fill="#0891b2" radius={[6, 6, 0, 0]} barSize={44} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
 
+              {/* Attendance Table */}
               <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                  <h3 className="font-bold text-slate-900 text-lg">Live Attendance Logs</h3>
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex flex-wrap gap-1">
+                <div className="p-6 border-b border-slate-100 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-slate-900 text-lg">Live Attendance Logs</h3>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={exportToCSV}
+                        className="px-3 py-2 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-1.5 transition-all"
+                        title="Export CSV"
+                      >
+                        <FileText className="w-4 h-4" />
+                        CSV
+                      </button>
+                      <button 
+                        onClick={exportToExcel}
+                        className="px-3 py-2 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-1.5 transition-all"
+                        title="Export Excel"
+                      >
+                        <Table className="w-4 h-4" />
+                        XLSX
+                      </button>
+                      <button 
+                        onClick={exportToPDF}
+                        className="px-3 py-2 bg-slate-100 hover:bg-red-50 hover:text-red-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-1.5 transition-all"
+                        title="Export PDF"
+                      >
+                        <Download className="w-4 h-4" />
+                        PDF
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Filter Pills for Departments */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 mr-1 flex items-center gap-1">
+                        <Building2 className="w-3 h-3" /> Departments:
+                      </span>
                       {DEPARTMENTS.map(dept => (
                         <button
                           key={dept}
                           onClick={() => {
                             setSelectedDepartments(prev => 
-                              prev.includes(dept) 
-                                ? prev.filter(d => d !== dept) 
-                                : [...prev, dept]
+                              prev.includes(dept) ? prev.filter(d => d !== dept) : [...prev, dept]
                             );
                           }}
-                          className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border ${
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
                             selectedDepartments.includes(dept)
                               ? 'bg-cyan-600 border-cyan-600 text-white shadow-sm'
-                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-300'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300'
                           }`}
                         >
                           {dept}
@@ -354,78 +520,105 @@ export default function AdminDashboard() {
                       {selectedDepartments.length > 0 && (
                         <button
                           onClick={() => setSelectedDepartments([])}
-                          className="px-3 py-1 rounded-full text-[10px] font-bold bg-white border border-red-200 text-red-500 hover:bg-red-50 transition-all"
+                          className="px-2 py-0.5 rounded-lg text-[10px] font-bold text-red-500 hover:bg-red-50"
                         >
-                          Clear Filters
+                          Clear
                         </button>
                       )}
                     </div>
-                    <div className="flex gap-2 ml-auto">
-                      <button 
-                        onClick={exportToCSV}
-                        className="px-3 py-2 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
-                        title="Export CSV"
-                      >
-                        <FileText className="w-4 h-4" />
-                        CSV
-                      </button>
-                      <button 
-                        onClick={exportToExcel}
-                        className="px-3 py-2 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
-                        title="Export Excel"
-                      >
-                        <Table className="w-4 h-4" />
-                        XLSX
-                      </button>
-                      <button 
-                        onClick={exportToPDF}
-                        className="px-3 py-2 bg-slate-100 hover:bg-red-50 hover:text-red-600 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-2 transition-all"
-                        title="Export PDF"
-                      >
-                        <Download className="w-4 h-4" />
-                        PDF
-                      </button>
+
+                    {/* Filter Pills for Employment Types */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 mr-1 flex items-center gap-1">
+                        <Briefcase className="w-3 h-3" /> Types:
+                      </span>
+                      {EMPLOYMENT_TYPES.map(etype => (
+                        <button
+                          key={etype}
+                          onClick={() => {
+                            setSelectedEmploymentTypes(prev => 
+                              prev.includes(etype) ? prev.filter(t => t !== etype) : [...prev, etype]
+                            );
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
+                            selectedEmploymentTypes.includes(etype)
+                              ? 'bg-slate-900 border-slate-900 text-white shadow-sm'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          {etype}
+                        </button>
+                      ))}
+                      {selectedEmploymentTypes.length > 0 && (
+                        <button
+                          onClick={() => setSelectedEmploymentTypes([])}
+                          className="px-2 py-0.5 rounded-lg text-[10px] font-bold text-red-500 hover:bg-red-50"
+                        >
+                          Clear
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
+
                 <div className="max-h-[500px] overflow-y-auto">
                   <table className="w-full text-left">
-                    <thead className="sticky top-0 bg-white/80 backdrop-blur-md shadow-sm z-10 border-b border-slate-100">
+                    <thead className="sticky top-0 bg-white/90 backdrop-blur-md shadow-sm z-10 border-b border-slate-100">
                       <tr>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employee</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Meal Type</th>
-                        <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Timestamp</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employee</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employment Type</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Meal Type</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Timestamp</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {getFilteredAttendance().sort((a, b) => b.timestamp?.toMillis() - a.timestamp?.toMillis()).map(record => (
+                      {getFilteredAttendance().sort((a, b) => (b.timestamp?.toMillis?.() || 0) - (a.timestamp?.toMillis?.() || 0)).map(record => (
                         <tr key={record.id} className="hover:bg-slate-50/50">
-                          <td className="px-8 py-4 text-sm font-bold text-slate-900">{record.userName}</td>
-                          <td className="px-8 py-4">
-                             <span className="text-[10px] font-bold uppercase bg-slate-100 px-2 py-1 rounded-md text-slate-500">{record.department}</span>
+                          <td className="px-6 py-4 text-sm font-bold text-slate-900">{record.userName}</td>
+                          <td className="px-6 py-4">
+                             <span className="text-[10px] font-bold uppercase bg-cyan-50 text-cyan-700 border border-cyan-100 px-2 py-1 rounded-md">
+                               {record.department}
+                             </span>
                           </td>
-                          <td className="px-8 py-4 text-sm text-cyan-600 font-medium">{record.mealType}</td>
-                          <td className="px-8 py-4 text-sm text-slate-400 text-right">{record.timestamp?.toDate().toLocaleString()}</td>
+                          <td className="px-6 py-4">
+                            <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded-md">
+                              {record.employmentType || 'Unassigned'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-cyan-600 font-semibold">{record.mealType}</td>
+                          <td className="px-6 py-4 text-xs text-slate-400 text-right">{record.timestamp?.toDate().toLocaleString()}</td>
                         </tr>
                       ))}
+                      {getFilteredAttendance().length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="p-12 text-center text-slate-400 italic">No attendance records found for selected filters.</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
               </div>
             </div>
 
+            {/* Overview Widget */}
             <div className="lg:col-span-1 space-y-6">
               <div className="bg-slate-900 rounded-3xl p-8 text-white">
                 <h4 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-8">System Overview</h4>
                 <div className="space-y-6">
                   <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
-                    <p className="text-xs text-slate-400 font-bold uppercase">Meals Today</p>
+                    <p className="text-xs text-slate-400 font-bold uppercase">Meals Served</p>
                     <p className="text-3xl font-bold text-cyan-400">{attendance.length}</p>
                   </div>
                   <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
                     <p className="text-xs text-slate-400 font-bold uppercase">Active Staff</p>
                     <p className="text-3xl font-bold text-emerald-400">{activeUsers.length}</p>
+                  </div>
+                  <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
+                    <p className="text-xs text-slate-400 font-bold uppercase">RFID Badges Linked</p>
+                    <p className="text-3xl font-bold text-cyan-300">
+                      {activeUsers.filter(u => u.rfidCardId).length}
+                    </p>
                   </div>
                   <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
                     <p className="text-xs text-slate-400 font-bold uppercase">Pending Actions</p>
@@ -437,6 +630,7 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
+        {/* STAFF ENROLLMENT TAB WITH EMPLOYMENT TYPE + DEPARTMENT SPLIT (NO BIOMETRICS) */}
         {activeTab === 'enroll' && (currentAdmin?.adminLevel === 1 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="enroll"
@@ -446,128 +640,154 @@ export default function AdminDashboard() {
             className="max-w-3xl mx-auto"
           >
             <div className="bg-white p-10 rounded-3xl border border-slate-200 shadow-xl">
-              <div className="mb-10">
-                <h2 className="text-2xl font-bold text-slate-900">New Staff Enrollment</h2>
-                <p className="text-slate-500">Add a new employee to the system. Requires checker approval.</p>
+              <div className="mb-8">
+                <h2 className="text-2xl font-bold text-slate-900">Staff Enrollment</h2>
+                <p className="text-slate-500 text-sm mt-1">
+                  Enroll an employee with their designated Employment Type, Department, and RFID Card.
+                </p>
               </div>
 
-              <form onSubmit={handleEnrollUser} className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Employee ID</label>
+              <form onSubmit={handleEnrollUser} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Employee ID */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Employee ID / Badge #</label>
                   <input 
                     type="text" 
                     value={newUser.id}
                     onChange={(e) => setNewUser({...newUser, id: e.target.value})}
-                    className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
-                    placeholder="EMP-001"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono text-sm"
+                    placeholder="e.g. EMP-1049"
                     required
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Full Name</label>
+
+                {/* Full Name */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
                   <input 
                     type="text" 
                     value={newUser.name}
                     onChange={(e) => setNewUser({...newUser, name: e.target.value})}
-                    className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500"
-                    placeholder="Jane Doe"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                    placeholder="e.g. John Doe"
                     required
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Department</label>
+
+                {/* SPLIT 1: Employment Type */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <Briefcase className="w-3.5 h-3.5 text-cyan-600" />
+                    <span>Employment Type</span>
+                  </label>
                   <select 
-                    value={newUser.department}
-                    onChange={(e) => setNewUser({...newUser, department: e.target.value})}
-                    className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500"
+                    value={newUser.employmentType}
+                    onChange={(e) => {
+                      const nextType = e.target.value;
+                      const isCollar = isCollarStaff(nextType);
+                      setNewUser({
+                        ...newUser,
+                        employmentType: nextType,
+                        department: isCollar ? (DEPARTMENTS.includes(newUser.department as any) ? newUser.department : 'HR') : nextType
+                      });
+                    }}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-medium"
                     required
                   >
-                    <option value="">Select Department</option>
-                    {DEPARTMENTS.map(dept => (
-                      <option key={dept} value={dept}>{dept}</option>
+                    {EMPLOYMENT_TYPES.map(type => (
+                      <option key={type} value={type}>{type}</option>
                     ))}
                   </select>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Weekly Allocation</label>
+
+                {/* SPLIT 2: Department (ONLY shown when Employment Type is White or Blue collar) */}
+                {isCollarStaff(newUser.employmentType) ? (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5 text-cyan-600" />
+                      <span>Department</span>
+                    </label>
+                    <select 
+                      value={newUser.department}
+                      onChange={(e) => setNewUser({...newUser, department: e.target.value})}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-medium"
+                      required
+                    >
+                      {DEPARTMENTS.map(dept => (
+                        <option key={dept} value={dept}>{dept}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col justify-center">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Department Assignment</span>
+                    <p className="text-xs font-bold text-slate-700">
+                      Not applicable for <span className="text-cyan-700">{newUser.employmentType}</span>
+                    </p>
+                    <span className="text-[10px] text-slate-400">Department selection is only enabled for White & Blue collar staff.</span>
+                  </div>
+                )}
+
+                {/* Weekly Ticket Allocation */}
+                <div className="md:col-span-2 space-y-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Weekly Ticket Allocation</label>
                   <input 
                     type="number" 
                     value={newUser.weeklyAllocation}
-                    onChange={(e) => setNewUser({...newUser, weeklyAllocation: parseInt(e.target.value)})}
-                    className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500"
+                    onChange={(e) => setNewUser({...newUser, weeklyAllocation: parseInt(e.target.value) || 0})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
                     min="1"
                     required
                   />
                 </div>
-                <div className="md:col-span-2 space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase">Biometric Enrollment</label>
-                  <div className="flex gap-4">
-                    <div className={`flex-1 px-5 py-3 rounded-2xl flex items-center gap-3 border ${newUser.biometricToken ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
-                      <Fingerprint className={`w-5 h-5 ${newUser.biometricToken ? 'text-emerald-500' : 'text-slate-300'}`} />
-                      <span className="text-sm font-medium">
-                        {newUser.biometricToken ? 'Hardware Registered' : 'Not Registered'}
-                      </span>
-                    </div>
+
+                {/* RFID Card UID Assignment */}
+                <div className="md:col-span-2 space-y-2 pt-2 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-cyan-600" />
+                      <span>RFID Card Serial UID (Tap USB Reader to Auto-Fill)</span>
+                    </label>
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (!newUser.name || !newUser.id) {
-                          alert("Please enter Name and Employee ID first.");
-                          return;
-                        }
-                        try {
-                          const cred = await enrollBiometrics(newUser.id, newUser.name);
-                          setNewUser({
-                            ...newUser,
-                            biometricToken: cred.credentialId,
-                          });
-                        } catch (err: any) {
-                          alert(err.message || "Scanning failed.");
-                        }
+                      onClick={() => {
+                        const randomUid = 'RFID-' + Math.floor(10000000 + Math.random() * 90000000);
+                        setNewUser({ ...newUser, rfidCardId: randomUid });
                       }}
-                      className="px-6 py-3 bg-cyan-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-cyan-700 transition-colors"
+                      className="text-xs text-cyan-600 font-bold hover:underline flex items-center gap-1"
                     >
-                      <Fingerprint className="w-5 h-5" />
-                      {newUser.biometricToken ? 'Rescan Finger' : 'Scan Finger'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const message = `WebAuthn Support: ${!!window.PublicKeyCredential}\nSecure Context: ${window.isSecureContext}\nIn Iframe: ${window.self !== window.top}\nOrigin: ${window.location.hostname}\n\nSecuGen WebAPI Check:\nScanning localhost:8000...\n`;
-                        
-                        try {
-                          const wapiResp = await fetch("http://localhost:8000/SGICAP?timeout=100").catch(() => null);
-                          const pyResp = await fetch("http://localhost:5000/api/scan").catch(() => null);
-                          
-                          if (wapiResp) {
-                            alert(message + "✅ SecuGen WebAPI DETECTED on port 8000.\n\nYour scanner should work directly!");
-                          } else if (pyResp) {
-                            alert(message + "✅ SECUGEN PYTHON BRIDGE DETECTED on port 5000.\n\nHardware connection is stable!");
-                          } else {
-                            alert(message + "❌ NO SCANNER BRIDGE DETECTED.\n\nTo use SecuGen Hamster Plus:\n1. Ensure 'SecuGen WebAPI' is running (Port 8000)\n2. OR Run the 'secugen_bridge.py' script (Port 5000)");
-                          }
-                        } catch (e) {
-                          alert(message + "❌ Service Error.\n\nTip: You need a local script or service to bridge the USB hardware to the web browser.");
-                        }
-                      }}
-                      className="px-4 py-3 bg-slate-100 text-slate-400 rounded-2xl hover:bg-slate-200 transition-colors"
-                      title="Check hardware compatibility"
-                    >
-                      <Cpu className="w-4 h-4" />
+                      <Sparkles className="w-3 h-3" />
+                      Generate Sample Card UID
                     </button>
                   </div>
+                  
+                  <input 
+                    type="text" 
+                    data-rfid-input="true"
+                    value={newUser.rfidCardId}
+                    onChange={(e) => setNewUser({...newUser, rfidCardId: e.target.value})}
+                    className="w-full px-4 py-3 bg-cyan-50/50 border border-cyan-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono text-cyan-900 font-bold text-sm placeholder-slate-400"
+                    placeholder="Hold RFID card to scanner, or leave blank to use Employee ID..."
+                  />
+                  <p className="text-[11px] text-slate-400">
+                    Hold any physical RFID badge / NFC card against the counter reader to capture it immediately.
+                  </p>
                 </div>
+
                 <button 
                   type="submit"
-                  className="md:col-span-2 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
+                  className="md:col-span-2 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2 mt-2"
                 >
-                  Create Enrollment Request
+                  <Check className="w-5 h-5 text-emerald-400" />
+                  <span>Submit Enrollment for Approval</span>
                 </button>
               </form>
             </div>
           </motion.div>
         )}
 
+        {/* MASS ALLOCATION TAB (Split by Department or Employment Type) */}
         {activeTab === 'alloc' && (currentAdmin?.adminLevel === 1 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
           <motion.div 
             key="alloc"
@@ -577,85 +797,119 @@ export default function AdminDashboard() {
             className="max-w-2xl mx-auto"
           >
             <div className="bg-white p-10 rounded-3xl border border-slate-200 shadow-xl">
-              <div className="mb-10 text-center">
-                <div className="w-16 h-16 bg-cyan-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <Ticket className="w-8 h-8 text-cyan-600" />
+              <div className="mb-8 text-center">
+                <div className="w-16 h-16 bg-cyan-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-cyan-600">
+                  <Ticket className="w-8 h-8" />
                 </div>
                 <h2 className="text-2xl font-bold text-slate-900">Mass Ticket Management</h2>
-                <p className="text-slate-500">Allocate or reduce tickets for an entire department instantly.</p>
+                <p className="text-slate-500 text-xs mt-1">Allocate or deduct tickets across an entire Department or Employment category.</p>
               </div>
 
               <div className="space-y-6">
-                <div className="flex bg-slate-50 p-1.5 rounded-2xl border border-slate-100 gap-1 mb-6">
+                {/* Mode Selector */}
+                <div className="flex bg-slate-50 p-1.5 rounded-2xl border border-slate-100 gap-1">
                    <button
                     onClick={() => setBatchAlloc({...batchAlloc, mode: 'add'})}
-                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
-                      batchAlloc.mode === 'add' ? 'bg-white text-cyan-600 shadow-md border border-slate-100' : 'text-slate-400 hover:text-slate-600'
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                      batchAlloc.mode === 'add' ? 'bg-white text-cyan-600 shadow-sm border border-slate-100' : 'text-slate-400 hover:text-slate-600'
                     }`}
                    >
-                     Add/Allocate
+                     Add / Allocate Credits
                    </button>
                    <button
                     onClick={() => setBatchAlloc({...batchAlloc, mode: 'subtract'})}
-                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
-                      batchAlloc.mode === 'subtract' ? 'bg-white text-red-600 shadow-md border border-slate-100' : 'text-slate-400 hover:text-slate-600'
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                      batchAlloc.mode === 'subtract' ? 'bg-white text-red-600 shadow-sm border border-slate-100' : 'text-slate-400 hover:text-slate-600'
                     }`}
                    >
-                     Deduct/Reduce
+                     Deduct / Reduce Credits
                    </button>
                 </div>
 
+                {/* Target Type Selector */}
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase">Target Department</label>
-                    <select 
-                      value={batchAlloc.department}
-                      onChange={(e) => setBatchAlloc({...batchAlloc, department: e.target.value})}
-                      className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500"
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setBatchAlloc({...batchAlloc, targetType: 'department', targetValue: ''})}
+                      className={`flex-1 py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                        batchAlloc.targetType === 'department'
+                          ? 'bg-cyan-50 border-cyan-300 text-cyan-800'
+                          : 'bg-white border-slate-200 text-slate-500'
+                      }`}
                     >
-                      <option value="">Select Department...</option>
-                      {DEPARTMENTS.map(dept => (
-                        <option key={dept} value={dept}>{dept}</option>
+                      <Building2 className="w-4 h-4" />
+                      <span>Target by Department</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchAlloc({...batchAlloc, targetType: 'employmentType', targetValue: ''})}
+                      className={`flex-1 py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                        batchAlloc.targetType === 'employmentType'
+                          ? 'bg-cyan-50 border-cyan-300 text-cyan-800'
+                          : 'bg-white border-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <Briefcase className="w-4 h-4" />
+                      <span>Target by Employment Type</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      Select {batchAlloc.targetType === 'department' ? 'Department' : 'Employment Type'}
+                    </label>
+                    <select 
+                      value={batchAlloc.targetValue}
+                      onChange={(e) => setBatchAlloc({...batchAlloc, targetValue: e.target.value})}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-cyan-500 text-sm font-medium"
+                    >
+                      <option value="">Choose target...</option>
+                      {(batchAlloc.targetType === 'department' ? DEPARTMENTS : EMPLOYMENT_TYPES).map(item => (
+                        <option key={item} value={item}>{item}</option>
                       ))}
                     </select>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase">
-                      {batchAlloc.mode === 'add' ? 'Refill Amount' : 'Reduction Amount'}
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase">
+                      {batchAlloc.mode === 'add' ? 'Credits to Add' : 'Credits to Deduct'}
                     </label>
                     <input 
-                      type="number"
+                      type="number" 
                       value={batchAlloc.amount}
-                      onChange={(e) => setBatchAlloc({...batchAlloc, amount: parseInt(e.target.value)})}
-                      className="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none"
+                      onChange={(e) => setBatchAlloc({...batchAlloc, amount: parseInt(e.target.value) || 0})}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none text-sm font-bold"
                       min="1"
                     />
                   </div>
                 </div>
 
-                <div className={`p-4 rounded-2xl border ${batchAlloc.mode === 'add' ? 'bg-blue-50 border-blue-100' : 'bg-red-50 border-red-100'}`}>
-                  <p className={`text-xs font-medium ${batchAlloc.mode === 'add' ? 'text-blue-700' : 'text-red-700'}`}>
-                    This will affect {users.filter(u => u.department === batchAlloc.department && u.status === 'active').length} staff members.
-                  </p>
-                </div>
+                {batchAlloc.targetValue && (
+                  <div className="p-4 rounded-2xl bg-cyan-50 border border-cyan-200 text-xs font-medium text-cyan-800">
+                    This will adjust tickets for {
+                      users.filter(u => 
+                        u.status === 'active' && 
+                        (batchAlloc.targetType === 'department' ? u.department === batchAlloc.targetValue : u.employmentType === batchAlloc.targetValue)
+                      ).length
+                    } active employees.
+                  </div>
+                )}
 
                 <button 
                   onClick={handleBatchAllocation}
-                  disabled={batchAlloc.isProcessing || !batchAlloc.department}
-                  className={`w-full py-5 text-white rounded-2xl font-bold disabled:opacity-50 transition-all shadow-lg ${
-                    batchAlloc.mode === 'add' 
-                      ? 'bg-cyan-600 hover:bg-cyan-700 shadow-cyan-100' 
-                      : 'bg-red-600 hover:bg-red-700 shadow-red-100'
-                  }`}
+                  disabled={batchAlloc.isProcessing || !batchAlloc.targetValue}
+                  className="w-full py-4 text-white rounded-2xl font-bold disabled:opacity-50 transition-all shadow-lg bg-cyan-600 hover:bg-cyan-700 text-sm"
                 >
-                  {batchAlloc.isProcessing ? 'Processing Batch...' : `Confirm Mass ${batchAlloc.mode === 'add' ? 'Allocation' : 'Reduction'}`}
+                  {batchAlloc.isProcessing ? 'Processing Batch...' : `Execute Mass ${batchAlloc.mode === 'add' ? 'Allocation' : 'Deduction'}`}
                 </button>
               </div>
             </div>
           </motion.div>
         )}
 
-        {activeTab === 'approvals' && (currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
+        {/* APPROVALS TAB */}
+        {activeTab === 'approvals' && (
           <motion.div 
             key="approvals"
             initial={{ opacity: 0, y: 10 }}
@@ -667,7 +921,12 @@ export default function AdminDashboard() {
               <div className="p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
                 <div>
                   <h3 className="font-bold text-slate-900 text-lg">Enrollment Approval Queue</h3>
-                  <p className="text-sm text-slate-500">Level 1 requests waiting for Level 2 confirmation.</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {currentAdmin?.adminLevel === 2 
+                      ? "Level 1 requests waiting for your confirmation." 
+                      : "Pending requests waiting for Level 2 confirmation."
+                    }
+                  </p>
                 </div>
                 <div className="px-3 py-1 bg-white rounded-lg text-xs font-bold text-cyan-600 shadow-sm border border-slate-200">
                   {pendingUsers.length} PENDING
@@ -675,45 +934,57 @@ export default function AdminDashboard() {
               </div>
 
               {pendingUsers.length === 0 ? (
-                <div className="p-20 text-center space-y-4">
-                  <CheckCircle2 className="w-12 h-12 text-emerald-100 mx-auto" />
-                  <p className="text-slate-400 font-medium italic">Approval queue is clear.</p>
+                <div className="p-16 text-center space-y-3">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-300 mx-auto" />
+                  <p className="text-slate-400 font-medium italic text-sm">Approval queue is clear.</p>
                 </div>
               ) : (
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b border-slate-50">
-                      <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Candidate</th>
-                      <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Details</th>
-                      <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Candidate</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Classification</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">RFID Card</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {pendingUsers.map(user => (
                       <tr key={user.id}>
-                        <td className="px-8 py-6">
-                          <p className="font-bold text-slate-900">{user.name}</p>
+                        <td className="px-6 py-4">
+                          <p className="font-bold text-slate-900 text-sm">{user.name}</p>
                           <p className="text-xs font-mono text-slate-400 uppercase">{user.id}</p>
                         </td>
-                        <td className="px-8 py-6">
-                           <p className="text-xs font-bold text-slate-600 mb-1">{user.department}</p>
-                           <p className="text-[10px] text-slate-400">ALLOCATION: {user.weeklyAllocation} TICKETS/WK</p>
+                        <td className="px-6 py-4">
+                          <p className="text-xs font-bold text-slate-700">{user.department}</p>
+                          <p className="text-[10px] text-slate-400">{user.employmentType || 'Standard'}</p>
                         </td>
-                        <td className="px-8 py-6 text-right">
-                          <div className="flex justify-end gap-3">
-                            <button 
-                              onClick={() => handleApprove(user.id, 'reject')}
-                              className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
-                            >
-                              <XCircle className="w-5 h-5" />
-                            </button>
-                            <button 
-                              onClick={() => handleApprove(user.id, 'approve')}
-                              className="px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors"
-                            >
-                              Approve Enrollment
-                            </button>
-                          </div>
+                        <td className="px-6 py-4">
+                          <span className="text-xs font-mono font-bold text-cyan-700 bg-cyan-50 px-2 py-1 rounded-md border border-cyan-100">
+                            {user.rfidCardId || user.id}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          {(currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') ? (
+                            <div className="flex justify-end gap-2">
+                              <button 
+                                onClick={() => handleApprove(user.id, 'reject')}
+                                className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => handleApprove(user.id, 'approve')}
+                                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors"
+                              >
+                                Approve Enrollment
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs font-bold text-amber-500 bg-amber-50 px-3 py-1 rounded-full uppercase">
+                               Awaiting Level 2
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -721,121 +992,10 @@ export default function AdminDashboard() {
                 </table>
               )}
             </div>
-
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-               <div className="p-6 bg-red-50 border-b border-red-100 flex items-center justify-between">
-                  <h3 className="font-bold text-red-900 text-lg">Deletion Requests</h3>
-                  <div className="px-3 py-1 bg-white rounded-lg text-xs font-bold text-red-600 shadow-sm border border-red-100">
-                    {deletionRequests.length} REQUESTS
-                  </div>
-               </div>
-
-               {deletionRequests.length === 0 ? (
-                 <div className="p-20 text-center text-slate-300 italic">No deletion requests.</div>
-               ) : (
-                 <table className="w-full text-left">
-                   <tbody className="divide-y divide-slate-50">
-                     {deletionRequests.map(user => (
-                       <tr key={user.id}>
-                         <td className="px-8 py-6">
-                            <p className="font-bold text-slate-900">{user.name}</p>
-                            <p className="text-xs text-slate-400">{user.id} • {user.department}</p>
-                         </td>
-                         <td className="px-8 py-6 text-right">
-                           <div className="flex justify-end gap-3">
-                             <button 
-                               onClick={() => handleApprove(user.id, 'approve')} // Approval effectively clears deletion status if rejected or resets it
-                               className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 rounded-lg"
-                             >
-                               Cancel Deletion
-                             </button>
-                             <button 
-                               onClick={() => handleApprove(user.id, 'finalize_delete')}
-                               className="px-6 py-3 bg-red-600 text-white rounded-xl text-sm font-bold hover:bg-red-700"
-                             >
-                               Finalize Removal
-                             </button>
-                           </div>
-                         </td>
-                       </tr>
-                     ))}
-                   </tbody>
-                 </table>
-               )}
-            </div>
-          </motion.div>
-        )}
-        {activeTab === 'permissions' && (currentAdmin?.adminLevel === 2 || currentAdmin?.email === 'ayodejikolawole99@gmail.com') && (
-          <motion.div 
-            key="permissions"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="space-y-6"
-          >
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-8 border-b border-slate-100">
-                <h3 className="text-xl font-bold text-slate-900 mb-2">User Access Control</h3>
-                <p className="text-slate-500">Manage administrative privileges and role assignments across the organization.</p>
-              </div>
-
-              <div className="p-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {users.sort((a, b) => a.name.localeCompare(b.name)).map(user => (
-                    <div key={user.id} className="p-6 border border-slate-100 rounded-2xl bg-slate-50/30 space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-bold text-slate-900">{user.name}</p>
-                          <p className="text-[10px] font-mono text-slate-400 uppercase">{user.id}</p>
-                        </div>
-                        <div className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${
-                          user.role === 'admin' ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {user.role}
-                        </div>
-                      </div>
-
-                      <div className="pt-2 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-slate-500">Admin Level</span>
-                          <select 
-                            value={user.adminLevel || 0}
-                            onChange={async (e) => {
-                              const level = parseInt(e.target.value);
-                              if (currentAdmin?.adminLevel !== 2) {
-                                alert("Only Level 2 Admin can change permissions.");
-                                return;
-                              }
-                              try {
-                                await updateDoc(doc(db, 'users', user.id), {
-                                  adminLevel: level,
-                                  role: level > 0 ? 'admin' : 'user'
-                                });
-                              } catch (err) {
-                                handleFirestoreError(err, OperationType.WRITE, 'users/permissions');
-                              }
-                            }}
-                            className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none font-bold"
-                          >
-                            <option value={0}>None (User)</option>
-                            <option value={1}>Level 1 (Maker)</option>
-                            <option value={2}>Level 2 (Checker)</option>
-                          </select>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-slate-500">Department</span>
-                          <span className="text-xs font-bold text-slate-600">{user.department}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
           </motion.div>
         )}
 
+        {/* PERSONNEL REGISTRY & RFID CARD MANAGEMENT (NO BIOMETRICS) */}
         {activeTab === 'staff' && (
           <motion.div 
             key="staff"
@@ -847,14 +1007,14 @@ export default function AdminDashboard() {
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                        <h3 className="font-bold text-slate-900 text-lg">Active Personnel Registry</h3>
-                        <p className="text-sm text-slate-500">Manage access and ticket balances for all enrolled staff.</p>
+                        <h3 className="font-bold text-slate-900 text-lg">Active Personnel & RFID Cards</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Manage employee classifications and tap-link RFID cards.</p>
                     </div>
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                         <input 
                           type="text" 
-                          placeholder="Search name or ID..." 
+                          placeholder="Search name, ID, or RFID card..." 
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
                           className="pl-10 pr-4 py-2 bg-slate-50 rounded-xl text-xs outline-none w-full md:w-64 border border-slate-100 focus:border-cyan-300 transition-colors" 
@@ -865,64 +1025,78 @@ export default function AdminDashboard() {
                     <table className="w-full text-left">
                         <thead>
                             <tr className="bg-slate-50">
-                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Name</th>
-                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
-                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tickets</th>
-                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
-                                <th className="px-8 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Name & ID</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employment Type</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">RFID Card UID</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tickets</th>
+                                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                             {activeUsers
-                              .filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase()) || u.id.toLowerCase().includes(searchQuery.toLowerCase()))
+                              .filter(u => 
+                                u.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                u.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                (u.department && u.department.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                (u.employmentType && u.employmentType.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                (u.rfidCardId && u.rfidCardId.toLowerCase().includes(searchQuery.toLowerCase()))
+                              )
                               .map(user => (
                                 <tr key={user.id} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="px-8 py-4">
+                                    <td className="px-6 py-4">
                                         <p className="text-sm font-bold text-slate-900">{user.name}</p>
                                         <p className="text-[10px] font-mono text-slate-400 uppercase">{user.id}</p>
                                     </td>
-                                    <td className="px-8 py-4">
-                                        <span className="text-[10px] font-bold uppercase bg-slate-100 px-2 py-1 rounded-md text-slate-500">
-                                            {user.department}
+                                    <td className="px-6 py-4">
+                                      {isCollarStaff(user.employmentType || '') ? (
+                                        <span className="text-[10px] font-bold uppercase bg-cyan-50 border border-cyan-100 text-cyan-800 px-2.5 py-1 rounded-md">
+                                          {user.department}
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] font-medium text-slate-400 italic">
+                                          Direct ({user.employmentType || 'Staff'})
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2.5 py-1 rounded-md">
+                                            {user.employmentType || 'Unassigned'}
                                         </span>
                                     </td>
-                                    <td className="px-8 py-4 font-mono text-sm">
-                                        <span className={user.ticketsBalance > 0 ? 'text-emerald-600' : 'text-red-500'}>
+                                    <td className="px-6 py-4">
+                                      <span className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 w-fit bg-slate-100 text-slate-800 border border-slate-200">
+                                        <CreditCard className="w-3.5 h-3.5 text-cyan-600" />
+                                        {user.rfidCardId || `Default (${user.id})`}
+                                      </span>
+                                    </td>
+                                    <td className="px-6 py-4 font-mono text-sm">
+                                        <span className={user.ticketsBalance > 0 ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>
                                             {user.ticketsBalance}
                                         </span>
                                         <span className="text-slate-300"> / {user.weeklyAllocation}</span>
                                     </td>
-                                    <td className="px-8 py-4">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                            <span className="text-[10px] font-bold uppercase text-emerald-600">ACTIVE</span>
-                                        </div>
-                                    </td>
-                                    <td className="px-8 py-4 text-right">
+                                    <td className="px-6 py-4 text-right">
                                         <div className="flex justify-end gap-2">
+                                            {/* Link / Reassign RFID Card Button */}
                                             <button 
-                                                onClick={async () => {
-                                                  try {
-                                                    const cred = await enrollBiometrics(user.id, user.name);
-                                                    await updateDoc(doc(db, 'users', user.id), {
-                                                      biometricToken: cred.credentialId
-                                                    });
-                                                    alert("Biometrics updated for " + user.name);
-                                                  } catch (err: any) {
-                                                    alert(err.message || "Failed to link biometrics.");
-                                                  }
+                                                onClick={() => {
+                                                  setLinkingRfidUser(user);
+                                                  setScannedModalCard(user.rfidCardId || '');
                                                 }}
-                                                className="p-2.5 bg-cyan-50 text-cyan-600 rounded-xl hover:bg-cyan-100 transition-colors"
-                                                title="Link/Update Biometrics"
+                                                className="px-3 py-1.5 bg-cyan-50 text-cyan-700 border border-cyan-200 rounded-xl hover:bg-cyan-100 transition-colors text-xs font-bold flex items-center gap-1.5"
+                                                title="Link/Change Physical RFID Card"
                                             >
-                                                <Fingerprint className="w-4 h-4" />
+                                                <CreditCard className="w-3.5 h-3.5 text-cyan-600" />
+                                                <span>Link Card</span>
                                             </button>
+
                                             <button 
                                                 onClick={() => requestDelete(user.id)}
-                                                className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
-                                                title="Request Deletion (Level 1)"
+                                                className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
+                                                title="Request Deletion"
                                             >
-                                                <Trash2 className="w-4 h-4" />
+                                                <Trash2 className="w-3.5 h-3.5" />
                                             </button>
                                         </div>
                                     </td>
@@ -930,7 +1104,7 @@ export default function AdminDashboard() {
                             ))}
                             {activeUsers.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="p-12 text-center text-slate-400 italic">No active personnel found.</td>
+                                    <td colSpan={6} className="p-12 text-center text-slate-400 italic">No active personnel found.</td>
                                 </tr>
                             )}
                         </tbody>
@@ -941,8 +1115,74 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* Main User List (Always visible in Reports or common view if needed) */}
+      {/* QUICK ASSIGN RFID CARD MODAL */}
+      {linkingRfidUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border border-slate-100"
+          >
+            <div className="w-16 h-16 bg-cyan-50 border border-cyan-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-cyan-600">
+              <CreditCard className="w-8 h-8" />
+            </div>
+
+            <h3 className="text-xl font-bold text-center text-slate-900 mb-1">
+              Link RFID Badge
+            </h3>
+            <p className="text-xs text-center text-slate-500 mb-6">
+              Assign a physical card or NFC badge to <strong>{linkingRfidUser.name}</strong> ({linkingRfidUser.department} • {linkingRfidUser.employmentType || 'Staff'}).
+            </p>
+
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+                <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Tap Card on Reader</p>
+                <input 
+                  type="text" 
+                  data-rfid-input="true"
+                  autoFocus
+                  value={scannedModalCard}
+                  onChange={(e) => setScannedModalCard(e.target.value)}
+                  placeholder="Hold card to scanner or type UID..."
+                  className="w-full text-center py-2 px-3 bg-white border border-slate-300 rounded-xl font-mono text-sm font-bold text-slate-900 outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const testCard = 'RFID-' + Math.floor(10000000 + Math.random() * 90000000);
+                    setScannedModalCard(testCard);
+                  }}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-colors"
+                >
+                  Generate Test UID
+                </button>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-slate-100">
+                <button
+                  onClick={() => {
+                    setLinkingRfidUser(null);
+                    setScannedModalCard('');
+                  }}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-xs transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveRfidAssignment}
+                  disabled={!scannedModalCard.trim()}
+                  className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-colors shadow-lg shadow-cyan-100"
+                >
+                  Save Badge
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
-

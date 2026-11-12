@@ -7,8 +7,16 @@
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
-        "department": { "type": "string" },
-        "biometricToken": { "type": "string", "description": "Simulated fingerprint hash" },
+        "employmentType": { 
+          "type": "string",
+          "enum": ["White collar staff", "Blue collar staff", "Delog", "Tuskeegee", "Medical"] 
+        },
+        "department": { 
+          "type": "string",
+          "enum": ["HR", "Engineering", "Finance", "Production", "Pre Press", "Logistics", "Quality", "SHER"] 
+        },
+        "rfidCardId": { "type": "string", "description": "RFID or NFC card serial number / badge ID" },
+        "rfidCardAssignedAt": { "type": "string", "format": "date-time" },
         "ticketsBalance": { "type": "integer" },
         "weeklyAllocation": { "type": "integer" },
         "role": { "type": "string", "enum": ["user", "admin"] },
@@ -27,8 +35,11 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "department": { "type": "string" },
+        "employmentType": { "type": "string" },
         "timestamp": { "type": "string", "format": "date-time" },
-        "mealType": { "type": "string" }
+        "mealType": { "type": "string" },
+        "authMethod": { "type": "string", "enum": ["rfid", "manual"] },
+        "cardId": { "type": "string" }
       },
       "required": ["userId", "timestamp", "department"]
     }

@@ -3,71 +3,76 @@ import { useEffect, useRef } from 'react';
 interface ScannerOptions {
   onScan: (token: string) => void;
   minChars?: number;
-  timeGap?: number; // Time between keys to consider it a "burst"
+  timeGap?: number; // Time between keys to consider it a "burst" from a hardware reader
+  allowInInputs?: boolean;
 }
 
 /**
- * Hook to detect "Plug and Play" HID scanners that act as keyboards.
- * It listens for rapid input sequences ending in 'Enter'.
+ * Hook to detect "Plug and Play" HID RFID / Barcode readers that emulate keyboards.
+ * USB RFID readers stream card serial numbers (e.g. '0010482914' or 'A3F8091B')
+ * within milliseconds and usually terminate with an 'Enter' keycode.
  */
-export function useHardwareScanner({ onScan, minChars = 4, timeGap = 50 }: ScannerOptions) {
+export function useHardwareScanner({
+  onScan,
+  minChars = 3,
+  timeGap = 90,
+  allowInInputs = false
+}: ScannerOptions) {
   const buffer = useRef<string>('');
   const lastKeyTime = useRef<number>(0);
   const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input field normally
-      const isInput = 
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement;
+      const target = e.target as HTMLElement | null;
+      const isSpecificRfidInput = target?.getAttribute('data-rfid-input') === 'true';
+      const isInput =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement;
+
+      // Allow if configured or marked as an RFID capturing input
+      if (isInput && !allowInInputs && !isSpecificRfidInput) {
+        return;
+      }
 
       const currentTime = Date.now();
-      
-      // If the gap between keys is too long, it might be a human typing
-      // But we still want to capture if it's the start of a sequence
+
+      // Reset buffer if delay between characters exceeds hardware burst threshold
       if (buffer.current.length > 0 && currentTime - lastKeyTime.current > timeGap) {
-        // Reset if too long gap
         buffer.current = '';
       }
 
       lastKeyTime.current = currentTime;
 
       if (e.key === 'Enter') {
-        if (buffer.current.length >= minChars) {
-          console.log("Hardware Scan Detected (Enter):", buffer.current);
-          onScan(buffer.current);
-          buffer.current = '';
+        const rawToken = buffer.current.trim();
+        if (rawToken.length >= minChars) {
           e.preventDefault();
-        } else {
-          buffer.current = '';
+          onScan(rawToken);
         }
+        buffer.current = '';
         if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       } else if (e.key.length === 1) {
-        // Only append if it's not an input field, or if we want global capture
-        if (!isInput) {
-          buffer.current += e.key;
-          
-          // Clear previous timeout
-          if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-          
-          // Set a timeout to trigger scan if no 'Enter' is sent but sequence stops
-          timeoutRef.current = window.setTimeout(() => {
-            if (buffer.current.length >= minChars) {
-              console.log("Hardware Scan Detected (Timeout):", buffer.current);
-              onScan(buffer.current);
-            }
-            buffer.current = '';
-          }, 200); // 200ms of silence after a burst triggers the scan
-        }
+        buffer.current += e.key;
+
+        if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+
+        // Fallback for readers that don't send Enter at the end of the burst
+        timeoutRef.current = window.setTimeout(() => {
+          const rawToken = buffer.current.trim();
+          if (rawToken.length >= minChars) {
+            onScan(rawToken);
+          }
+          buffer.current = '';
+        }, 220);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handleKeyDown, true);
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     };
-  }, [onScan, minChars, timeGap]);
+  }, [onScan, minChars, timeGap, allowInInputs]);
 }

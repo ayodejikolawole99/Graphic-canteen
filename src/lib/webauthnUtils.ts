@@ -102,6 +102,9 @@ export async function enrollBiometrics(userId: string, userName: string) {
     };
   } catch (err: any) {
     console.error("Enrollment Error:", err);
+    if (err.message?.toLowerCase().includes('permissions policy') || err.message?.toLowerCase().includes('feature is not enabled')) {
+      throw new Error('SECURE ACCESS BLOCKED: Biometric hardware (Fingerprint/FaceID) cannot be accessed within this preview window for security reasons. \n\nFIX: Please open the application in a NEW TAB using the "Open Window" icon at the bottom right of the screen.');
+    }
     if (err.name === 'NotAllowedError') throw new Error('Registration timed out or was cancelled by the user. Ensure you are using a secure browser.');
     if (err.name === 'InvalidStateError') throw new Error('This device or fingerprint is already registered.');
     if (err.name === 'SecurityError') {
@@ -185,6 +188,9 @@ export async function verifyBiometrics(credentialId: string) {
     return assertion;
   } catch (err: any) {
     console.error("Verification Error:", err);
+    if (err.message?.toLowerCase().includes('permissions policy') || err.message?.toLowerCase().includes('feature is not enabled')) {
+      throw new Error('SECURE ACCESS BLOCKED: Biometric hardware cannot be accessed within this window. \n\nFIX: Please open the application in a NEW TAB using the "Open Window" icon at the bottom right.');
+    }
     if (err.name === 'NotAllowedError') throw new Error('Biometric scan was cancelled or timed out.');
     if (err.name === 'NotSupportedError') throw new Error('Your hardware/browser doesn\'t support this security method.');
     if (err.name === 'SecurityError') {

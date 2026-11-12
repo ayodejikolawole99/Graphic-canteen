@@ -1,11 +1,21 @@
-import { verifyBiometrics } from '../lib/webauthnUtils';
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
-import { CheckCircle2, Fingerprint, Printer, ShieldCheck, Ticket, XCircle, Cpu, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { 
+  CheckCircle2, 
+  Printer, 
+  Ticket, 
+  XCircle, 
+  CreditCard, 
+  Radio, 
+  Sparkles, 
+  Building2,
+  Briefcase
+} from 'lucide-react';
+import { motion } from 'motion/react';
 import React, { useState, useCallback } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { UserProfile } from '../types';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
+import { playSuccessChime, playErrorBuzz, playTapBeep } from '../lib/audio';
 import { LOGO_URL } from '../constants';
 
 interface UserDashboardProps {
@@ -14,145 +24,124 @@ interface UserDashboardProps {
 }
 
 export default function UserDashboard({ profile, isKiosk = false }: UserDashboardProps) {
-  const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<'success' | 'fail' | null>(null);
-  const [lastTicket, setLastTicket] = useState<{ id: string, time: Date } | null>(null);
+  const [lastTicket, setLastTicket] = useState<{ id: string; time: Date } | null>(null);
   const [balance, setBalance] = useState(profile.ticketsBalance);
-  const [showVerifyModal, setShowVerifyModal] = useState(false);
-  const [verificationToken, setVerificationToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scannerStatus, setScannerStatus] = useState<'idle' | 'detected'>('idle');
 
-  // Automatic reset for Kiosk Mode
+  // Automatic reset for Kiosk Mode if active
   React.useEffect(() => {
     if (!isKiosk) return;
-    
-    // If any state changes (scanning, show modal, scan result), start a timeout
-    if (scanning || showVerifyModal || scanResult) {
+    if (scanResult) {
       const timer = setTimeout(() => {
-        setScanning(false);
         setScanResult(null);
-        setShowVerifyModal(false);
-        setVerificationToken('');
       }, 8000);
-      
       return () => clearTimeout(timer);
     }
-  }, [isKiosk, scanning, showVerifyModal, scanResult]);
+  }, [isKiosk, scanResult]);
 
-  const handleVerify = useCallback(async (tokenOrEvent?: React.FormEvent | string) => {
-    if (typeof tokenOrEvent !== 'string') {
-      tokenOrEvent?.preventDefault();
-    }
-    const token = typeof tokenOrEvent === 'string' ? tokenOrEvent : verificationToken;
-    
-    if (!profile) {
-      setError("User profile not authenticated. Please refresh or log in.");
-      return;
-    }
+  const getCurrentMealType = () => {
+    const hour = new Date().getHours();
+    if (hour < 11) return 'Breakfast';
+    if (hour < 16) return 'Lunch';
+    return 'Dinner';
+  };
 
-    // Determine the type of biometric stored
-    const isWebAuthn = profile.biometricToken && profile.biometricToken.length > 25 && !profile.biometricToken.startsWith('SG_');
-    const isSecuGen = profile.biometricToken?.startsWith('SG_');
-
-    // If we are manually triggering (empty token) and it's NOT a specialized HW, we just wait
-    if (token === '' && !isWebAuthn && !isSecuGen) {
-      setShowVerifyModal(true);
-      setIsVerifying(true); // Shows the scanning state
-      setError(null);
-      return;
-    }
-
-    setIsVerifying(true);
-    setScanning(false);
-    setShowVerifyModal(true);
-    setError(null);
-    if (typeof token === 'string' && token !== '') setVerificationToken(token);
-
-    try {
-      // If no token was provided (manual confirm click), trigger the appropriate hardware
-      if (token === '') {
-        if (isWebAuthn || isSecuGen) {
-          try {
-            await verifyBiometrics(profile.biometricToken!);
-          } catch (authErr: any) {
-            throw authErr;
-          }
-        } else {
-           throw new Error('Please scan your biometric device.');
-        }
-      } else if (token !== '') {
-        // HID Scanner or manual entry check
-        if (token !== profile.biometricToken && profile.biometricToken !== undefined) {
-          throw new Error('Biometric signature mismatch. Please try again.');
-        }
-      } else {
-        // No token and not WebAuthn - this case should be handled by the early return above,
-        // but as a safety measure:
-        throw new Error('Please scan your biometric device.');
-      }
-
-      const attendanceRef = collection(db, 'attendance');
-      let newDoc;
-      try {
-        newDoc = await addDoc(attendanceRef, {
-          userId: profile.id,
-          userName: profile.name,
-          department: profile.department,
-          timestamp: serverTimestamp(),
-          mealType: getCurrentMealType(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'attendance');
-        return; // handleFirestoreError throws, but just in case
-      }
-
-      const userRef = doc(db, 'users', profile.id);
-      const newBalance = balance - 1;
-      try {
-        await updateDoc(userRef, {
-          ticketsBalance: newBalance
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `users/${profile.id}`);
+  const handleVerify = useCallback(
+    async (token?: string) => {
+      if (!profile) {
+        setError('User profile not authenticated. Please refresh or log in.');
         return;
       }
 
-      setBalance(newBalance);
-      setScanResult('success');
-      const ticketId = newDoc.id.slice(-6).toUpperCase();
-      setLastTicket({ id: ticketId, time: new Date() });
-      setShowVerifyModal(false);
-      setVerificationToken('');
-
-      // Trigger automatic POS print
-      setTimeout(() => {
-        window.print();
-      }, 500);
-
-      if (isKiosk) {
-        setTimeout(() => setScanResult(null), 8000);
+      if (balance <= 0) {
+        playErrorBuzz();
+        setError('No tickets remaining for this week. Please contact the canteen admin.');
+        setScanResult('fail');
+        return;
       }
-    } catch (err: any) {
-      console.error("Verification failed:", err);
-      setScanResult('fail');
-      setError(err.message || 'Verification error occurred.');
-      setShowVerifyModal(false);
-      setVerificationToken('');
-      
-      if (isKiosk) {
+
+      setIsVerifying(true);
+      setError(null);
+
+      try {
+        const cardToVerify = token || profile.rfidCardId || profile.id;
+
+        if (token) {
+          const matchesRfid = profile.rfidCardId && profile.rfidCardId.toLowerCase() === token.toLowerCase();
+          const matchesId = profile.id.toLowerCase() === token.toLowerCase();
+          if (!matchesRfid && !matchesId) {
+            throw new Error(`RFID Card UID (${token}) does not match your registered card (${profile.rfidCardId || profile.id}).`);
+          }
+        }
+
+        playTapBeep();
+
+        const attendanceRef = collection(db, 'attendance');
+        let newDoc;
+        try {
+          newDoc = await addDoc(attendanceRef, {
+            userId: profile.id,
+            userName: profile.name,
+            department: profile.department,
+            employmentType: profile.employmentType || '',
+            timestamp: serverTimestamp(),
+            mealType: getCurrentMealType(),
+            authMethod: 'rfid',
+            cardId: cardToVerify
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'attendance');
+          return;
+        }
+
+        const userRef = doc(db, 'users', profile.id);
+        const newBalance = balance - 1;
+        try {
+          await updateDoc(userRef, {
+            ticketsBalance: newBalance
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `users/${profile.id}`);
+          return;
+        }
+
+        setBalance(newBalance);
+        playSuccessChime();
+        setScanResult('success');
+        const ticketId = newDoc.id.slice(-6).toUpperCase();
+        setLastTicket({ id: ticketId, time: new Date() });
+
+        // Trigger POS print preview
         setTimeout(() => {
-          setScanResult(null);
-          setError(null);
-        }, 5000);
-      }
-    } finally {
-      setIsVerifying(false);
-    }
-  }, [balance, profile, verificationToken, isKiosk, setError]);
+          window.print();
+        }, 500);
 
-  // Hardware Scanner Integration
+        if (isKiosk) {
+          setTimeout(() => setScanResult(null), 8000);
+        }
+      } catch (err: any) {
+        console.error('Verification failed:', err);
+        playErrorBuzz();
+        setScanResult('fail');
+        setError(err.message || 'RFID verification error occurred.');
+
+        if (isKiosk) {
+          setTimeout(() => {
+            setScanResult(null);
+            setError(null);
+          }, 5000);
+        }
+      } finally {
+        setIsVerifying(false);
+      }
+    },
+    [balance, profile, isKiosk]
+  );
+
+  // USB RFID Reader listener
   useHardwareScanner({
     onScan: (token) => {
       setScannerStatus('detected');
@@ -162,91 +151,101 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
     minChars: 3
   });
 
-  const startScan = async () => {
-    if (balance <= 0) {
-      alert("No tickets remaining for this week. Please contact admin.");
-      return;
-    }
-
-    setScanning(true);
-    setScanResult(null);
-
-    // Simulated scan delay to build tension
-    setTimeout(() => {
-      setScanning(false);
-      setShowVerifyModal(true);
-    }, 2500);
-  };
-
-  const getCurrentMealType = () => {
-    const hour = new Date().getHours();
-    if (hour < 11) return 'Breakfast';
-    if (hour < 16) return 'Lunch';
-    return 'Dinner';
-  };
-
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Profile Card */}
+      {/* Left Column: Profile Card & Digital RFID Badge */}
       <div className="lg:col-span-1 space-y-6">
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+        {/* User Details Card */}
+        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
           <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
-              <Fingerprint className="w-8 h-8" />
+            <div className="w-14 h-14 bg-cyan-50 border border-cyan-100 rounded-2xl flex items-center justify-center text-cyan-600 font-bold text-xl">
+              {profile.name.charAt(0)}
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">{profile.name}</h2>
-              <p className="text-sm text-slate-500">{profile.department}</p>
+              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                {profile.department && profile.department !== profile.employmentType && (
+                  <span className="text-[10px] font-bold uppercase bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded border border-cyan-100 flex items-center gap-1">
+                    <Building2 className="w-2.5 h-2.5" />
+                    {profile.department}
+                  </span>
+                )}
+                <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded flex items-center gap-1">
+                  <Briefcase className="w-2.5 h-2.5" />
+                  {profile.employmentType || profile.department || 'Staff'}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="bg-slate-50 p-4 rounded-xl flex items-center justify-between">
+          <div className="space-y-3">
+            <div className="bg-slate-50 p-4 rounded-2xl flex items-center justify-between border border-slate-100">
               <div className="flex items-center gap-3">
                 <Ticket className="w-5 h-5 text-cyan-600" />
-                <span className="text-sm font-medium text-slate-600">Tickets Left</span>
+                <span className="text-sm font-semibold text-slate-700">Tickets Left</span>
               </div>
               <span className="text-2xl font-bold text-slate-900 font-mono">{balance}</span>
             </div>
-            
+
             <div className="flex justify-between text-xs text-slate-400 px-1">
               <span>Weekly Cap: {profile.weeklyAllocation}</span>
-              <span>Status: Active</span>
+              <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" /> Active
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Digital RFID Card Badge */}
+        <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-cyan-950 text-white rounded-3xl p-6 shadow-xl border border-cyan-500/20 relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-cyan-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="flex items-center justify-between mb-6 relative z-10">
+            <img src={LOGO_URL} alt="Graphic Packaging" className="h-4 w-auto brightness-200" referrerPolicy="no-referrer" />
+            <div className="flex items-center gap-1.5 bg-cyan-500/20 border border-cyan-400/30 px-2.5 py-1 rounded-full text-[10px] font-mono text-cyan-300 font-bold">
+              <Radio className="w-3 h-3 text-cyan-400 animate-pulse" />
+              <span>RFID BADGE</span>
             </div>
           </div>
 
-          <div className="mt-6 pt-6 border-t border-slate-100">
-            <button 
-              onClick={async () => {
-                const message = `Authentication method: ${profile.biometricToken?.length && profile.biometricToken.length > 25 ? (profile.biometricToken.startsWith('SG_') ? 'SecuGen WebAPI' : 'Internal Biometric (WebAuthn)') : 'External USB Scanner'}\n\nTechnical Details:\n- WebAuthn Support: ${!!window.PublicKeyCredential}\n- Origin: ${window.location.hostname}\n- Secure Context: ${window.isSecureContext}\n- In Iframe: ${window.self !== window.top}\n\nSecuGen WebAPI Check:\n`;
-                
-                try {
-                  const wapiResp = await fetch("http://localhost:8000/SGICAP?timeout=100").catch(() => null);
-                  const pyResp = await fetch("http://localhost:5000/api/scan").catch(() => null);
-                  
-                  if (wapiResp) {
-                    alert(message + "✅ SecuGen WebAPI DETECTED on port 8000.\n\nYour scanner should communicate properly.");
-                  } else if (pyResp) {
-                    alert(message + "✅ SECUGEN PYTHON BRIDGE DETECTED on port 5000.\n\nConnection is working!");
-                  } else {
-                    alert(message + "❌ NO SCANNER BRIDGE detected locally.\n\nIf using SecuGen, please ensure either the WebAPI service or the custom Python Bridge is running on your PC.");
-                  }
-                } catch (e) {
-                   alert(message + "❌ SecuGen Service unreachable.\n\nNote: If using built-in biometrics, please open in a NEW TAB.");
-                }
-              }}
-              className="w-full py-2 bg-slate-50 text-slate-400 text-[10px] font-bold uppercase tracking-wider rounded-lg hover:bg-slate-100 transition-colors"
+          {/* Golden Smart Card Chip Graphic */}
+          <div className="w-10 h-8 rounded-md bg-amber-400 border border-amber-300 shadow-inner grid grid-cols-2 gap-0.5 p-1 mb-4">
+            <div className="bg-amber-600/40 rounded-sm" />
+            <div className="bg-amber-600/40 rounded-sm" />
+            <div className="bg-amber-600/40 rounded-sm" />
+            <div className="bg-amber-600/40 rounded-sm" />
+          </div>
+
+          <div className="space-y-1 relative z-10">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-slate-400">Card Serial UID</p>
+            <p className="text-lg font-mono font-bold tracking-wider text-cyan-300">
+              {profile.rfidCardId || profile.id}
+            </p>
+          </div>
+
+          <div className="mt-6 pt-4 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-300">
+            <div>
+              <p className="text-[10px] text-slate-400 uppercase">Card Holder</p>
+              <p className="font-bold text-white text-xs">{profile.name}</p>
+            </div>
+            <button
+              onClick={() => handleVerify(profile.rfidCardId || profile.id)}
+              disabled={isVerifying}
+              className="px-3.5 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-cyan-900/40"
+              title="Test tap this card"
             >
-              Troubleshoot Scanner
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Test Tap Card</span>
             </button>
           </div>
         </div>
 
+        {/* Last Ticket Printed */}
         {lastTicket && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="bg-cyan-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden group"
+            className="bg-cyan-600 text-white p-6 rounded-3xl shadow-lg relative overflow-hidden group"
           >
             <div className="relative z-10">
               <div className="flex items-center justify-between mb-2">
@@ -254,7 +253,7 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
                   <Printer className="w-4 h-4" />
                   <span className="text-xs font-bold uppercase tracking-wider opacity-80">Last Ticket Printed</span>
                 </div>
-                <button 
+                <button
                   onClick={() => window.print()}
                   className="p-1 hover:bg-white/20 rounded-md transition-colors"
                   title="Re-print ticket"
@@ -270,173 +269,88 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
         )}
       </div>
 
-      {/* Scanner Section */}
+      {/* Right Column: RFID Contactless Check-In Station */}
       <div className="lg:col-span-2">
-        <div className="bg-white rounded-2xl h-full min-h-[400px] border border-slate-200 p-8 flex flex-col items-center justify-center relative shadow-sm">
+        <div className="bg-white rounded-3xl h-full min-h-[480px] border border-slate-200 p-8 flex flex-col items-center justify-center relative shadow-sm">
+          
           {scanResult === 'success' ? (
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="text-center"
-            >
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center py-6">
               <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <CheckCircle2 className="w-12 h-12 text-emerald-600" />
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 mb-2">Verified Successfully</h3>
-              <p className="text-slate-500 mb-8">Your {getCurrentMealType()} ticket has been allocated and printed.</p>
-              <button 
+              <h3 className="text-2xl font-bold text-slate-900 mb-2">Card Verified Successfully</h3>
+              <p className="text-slate-500 mb-8 max-w-sm mx-auto text-sm">
+                Your {getCurrentMealType()} ticket has been allocated and printed via RFID Badge.
+              </p>
+              <button
                 onClick={() => setScanResult(null)}
-                className="text-cyan-600 font-medium hover:underline"
+                className="bg-slate-900 hover:bg-slate-800 text-white px-8 py-3 rounded-xl font-bold text-xs transition-colors"
               >
-                Scan Another Member
+                Scan Another Card
               </button>
             </motion.div>
           ) : scanResult === 'fail' ? (
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="text-center"
-            >
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center py-6">
               <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <XCircle className="w-12 h-12 text-red-600" />
               </div>
               <h3 className="text-2xl font-bold text-slate-900 mb-2">Verification Failed</h3>
-              <p className="text-slate-500 mb-8">{error || 'Biometric data did not match or error occurred. Please try again.'}</p>
-              <button 
+              <p className="text-slate-500 mb-8 max-w-sm mx-auto text-sm">{error || 'Card data error occurred. Please try again.'}</p>
+              <button
                 onClick={() => {
                   setScanResult(null);
                   setError(null);
                 }}
-                className="bg-slate-900 text-white px-8 py-3 rounded-xl font-semibold"
+                className="bg-slate-900 text-white px-8 py-3 rounded-xl font-semibold text-xs"
               >
-                Retry Scan
+                Retry
               </button>
             </motion.div>
           ) : (
-            <>
-              <div className="text-center mb-12">
-                <h3 className="text-slate-400 font-bold uppercase tracking-widest text-xs mb-2">Biometric Authentication</h3>
-                <p className="text-slate-900 font-medium font-serif italic text-xl">"Place your finger on the scanner"</p>
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-6">
+                <span className="px-3.5 py-1 rounded-full bg-cyan-50 border border-cyan-200 text-cyan-700 text-xs font-bold uppercase tracking-wider inline-block mb-3">
+                  Contactless RFID Checkout
+                </span>
+                <h3 className="text-2xl font-bold text-slate-900 mb-1">
+                  Touch Badge to USB Reader
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Hold your physical staff card against the reader or click below to simulate tap.
+                </p>
               </div>
 
-              <div className="relative">
-                <motion.div 
-                  className={`w-64 h-80 rounded-3xl border-4 ${scanning ? 'border-cyan-400 bg-cyan-950/10' : 'border-slate-200 bg-slate-50'} flex items-center justify-center transition-all duration-500 shadow-inner`}
-                  whileHover={!scanning ? { scale: 1.02 } : {}}
+              {/* RFID Card Animation Target */}
+              <div className="relative my-4 group">
+                <div className="absolute inset-0 rounded-3xl bg-cyan-400/20 animate-ping opacity-40 pointer-events-none" />
+
+                <div
+                  onClick={() => handleVerify(profile.rfidCardId || profile.id)}
+                  className="w-72 h-80 rounded-3xl border-2 border-dashed border-cyan-400 bg-cyan-50/50 hover:bg-cyan-50 flex flex-col items-center justify-center p-6 cursor-pointer transition-all duration-300 shadow-inner group-hover:scale-102"
                 >
-                  <Fingerprint className={`w-32 h-32 ${scanning ? 'text-cyan-400' : 'text-slate-300'} transition-colors duration-500`} />
-                  
-                  {scanning && (
-                    <div className="absolute inset-x-8 top-12 bottom-12 rounded-xl overflow-hidden pointer-events-none">
-                      <div className="biometric-scanner-animation h-full w-full">
-                        <div className="biometric-scanner-line" />
-                      </div>
-                    </div>
-                  )}
-                </motion.div>
-
-                {!scanning && (
-                  <button
-                    onClick={startScan}
-                    className="absolute inset-0 w-full h-full cursor-pointer opacity-0"
-                    aria-label="Start biometric scan"
-                  />
-                )}
-              </div>
-
-              <div className="mt-12 text-center text-slate-400 text-sm flex flex-col items-center gap-4">
-                {scanning ? (
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-cyan-600" />
-                    <span>Analyzing biometric patterns...</span>
+                  <div className="w-20 h-20 rounded-2xl bg-cyan-600 text-white flex items-center justify-center mb-4 shadow-lg shadow-cyan-200 group-hover:scale-105 transition-transform">
+                    <CreditCard className="w-10 h-10" />
                   </div>
-                ) : (
-                  <span>Scanner ready • Secure tunnel established</span>
-                )}
-
-                <AnimatePresence>
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${
-                      scannerStatus === 'detected' 
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-600' 
-                        : 'bg-slate-50 border-slate-200 text-slate-400'
-                    } transition-colors`}
-                  >
-                    <Cpu className={`w-3 h-3 ${scannerStatus === 'detected' ? 'animate-pulse' : ''}`} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">
-                      {scannerStatus === 'detected' ? 'Hardware Scan Detected' : 'Hardware Scanner Link Active'}
-                    </span>
-                  </motion.div>
-                </AnimatePresence>
+                  <h4 className="font-bold text-slate-900 text-base mb-1">Click to Simulate Tap</h4>
+                  <p className="text-xs text-slate-500 max-w-[200px]">
+                    1-second checkout • No drivers required
+                  </p>
+                  <div className="mt-4 px-3 py-1 bg-cyan-100 text-cyan-800 text-[10px] font-mono font-bold rounded-full">
+                    UID: {profile.rfidCardId || profile.id}
+                  </div>
+                </div>
               </div>
-            </>
+
+              <div className="mt-6 text-center text-slate-400 text-xs flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>USB Reader Ready • Plug & Play Active</span>
+              </div>
+            </div>
           )}
         </div>
       </div>
-      {/* Verification Modal */}
-      {showVerifyModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
-          <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-2xl w-full max-w-sm p-8 shadow-2xl relative overflow-hidden"
-          >
-            <div className="absolute top-0 left-0 w-full h-1 bg-slate-100">
-              {isVerifying && (
-                <motion.div 
-                  className="h-full bg-cyan-500"
-                  initial={{ width: 0 }}
-                  animate={{ width: '100%' }}
-                  transition={{ duration: 1.5 }}
-                />
-              )}
-            </div>
 
-            <div className="text-center mb-10">
-              <div className="w-20 h-20 bg-cyan-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                {isVerifying ? (
-                    <Loader2 className="w-10 h-10 text-cyan-600 animate-spin" />
-                ) : (
-                    <Fingerprint className="w-10 h-10 text-cyan-600" />
-                )}
-              </div>
-              <h3 className="text-xl font-bold text-slate-900">
-                {isVerifying ? 'Hardware verification active' : 'Confirm Identity'}
-              </h3>
-              <p className="text-sm text-slate-500 mt-2">
-                {isVerifying 
-                  ? 'Please use your registered biometric device now...' 
-                  : 'Ready to scan. Click confirm to trigger hardware.'}
-              </p>
-            </div>
-
-            <div className="flex gap-3">
-              <button 
-                type="button"
-                onClick={() => {
-                  setShowVerifyModal(false);
-                  setScanning(false);
-                }}
-                disabled={isVerifying}
-                className="flex-1 py-3 px-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button 
-                type="button"
-                onClick={() => handleVerify('')}
-                disabled={isVerifying}
-                className="flex-2 py-3 px-4 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-700 transition-colors shadow-lg shadow-cyan-100 disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isVerifying ? 'Scanning...' : 'Confirm & Scan'}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-      {/* POS Ticket Component (Hidden except during printing) */}
+      {/* Hidden POS Thermal Ticket for window.print() */}
       {lastTicket && (
         <div id="pos-ticket" className="no-print">
           <div className="ticket-header">
@@ -444,15 +358,12 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
             <h1 className="font-bold uppercase tracking-tighter text-[10pt]">Graphic Packaging</h1>
             <p className="text-[7pt] font-sans">Official Meal Voucher</p>
           </div>
-          
+
           <div className="ticket-body">
-            <p className="font-sans text-[9pt]">{profile.name}</p>
-            <p className="font-sans text-[8pt] opacity-70">{profile.department}</p>
-            
-            <div className="ticket-id tracking-widest text-[#000]">
-              #{lastTicket.id}
-            </div>
-            
+            <p className="font-sans text-[9pt] font-bold">{profile.name}</p>
+            <p className="font-sans text-[8pt] opacity-80">{profile.department} • {profile.employmentType || 'Staff'}</p>
+            <p className="font-mono text-[7pt] opacity-60">ID: {profile.id}</p>
+            <div className="ticket-id tracking-widest text-[#000] my-2">#{lastTicket.id}</div>
             <div className="my-2 p-1 border border-black border-dashed">
               <p className="font-bold text-[10pt] uppercase">{getCurrentMealType()}</p>
             </div>
@@ -461,7 +372,7 @@ export default function UserDashboard({ profile, isKiosk = false }: UserDashboar
           <div className="ticket-footer">
             <p>{lastTicket.time.toLocaleDateString()} {lastTicket.time.toLocaleTimeString()}</p>
             <p className="mt-1 font-bold">CREDITS LEFT: {balance}</p>
-            <p className="mt-4 text-[7pt] italic">System Verified Biometric</p>
+            <p className="mt-4 text-[7pt] italic">AUTH: RFID CARD VERIFIED</p>
           </div>
         </div>
       )}
